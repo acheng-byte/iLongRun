@@ -10,6 +10,19 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from _ilongrun_lib import load_model_config, read_json, resolve_run_target, scheduler_path  # noqa: E402
 from _ilongrun_shared import display_model_name  # noqa: E402
+from _ilongrun_terminal_theme import (  # noqa: E402
+    BOLD,
+    PALETTE,
+    board_line,
+    board_title,
+    detail_line,
+    left_border,
+    open_bottom,
+    open_top,
+    paint,
+    section_heading,
+    section_rule,
+)
 
 
 STATE_LABELS = {
@@ -33,6 +46,7 @@ PROFILE_LABELS = {
 }
 PHASE_LABELS = {
     "phase-strategy": "策略制定",
+    "phase-build": "构建",
     "phase-execution": "执行",
     "phase-audit": "最终审查",
     "phase-finalize": "收尾",
@@ -43,8 +57,39 @@ def zh(mapping: dict[str, str], raw: str | None) -> str:
     return mapping.get(raw or "", raw or "无")
 
 
-def line(label: str, value: str) -> str:
-    return f"│  {label:<10} {value}"
+def tone(kind: str, text: str) -> str:
+    return paint(text, PALETTE[kind], BOLD)
+
+
+def state_value(state: str) -> str:
+    label = zh(STATE_LABELS, state)
+    if state == "complete":
+        return tone("ok", f"✅ 已完成（{label}）")
+    if state == "blocked":
+        return tone("err", f"⛔ 已阻塞（{label}）")
+    if state == "pending":
+        return tone("warn", f"⏳ 等待执行（{label}）")
+    return tone("bright", f"🔄 后台运行（{label}）")
+
+
+def phase_value(phase: str, sched: dict) -> str:
+    phase_text = zh(PHASE_LABELS, phase)
+    wave_cursor = sched.get("waveCursor")
+    if wave_cursor:
+        return tone("soft", f"{phase_text} - 波次 {wave_cursor}")
+    return tone("soft", phase_text)
+
+
+def model_value(raw: str, config: dict) -> str:
+    return f"{tone('bright', display_model_name(raw, config))} {paint(f'({raw})', PALETTE['muted'])}"
+
+
+def path_value(raw: str) -> str:
+    return paint(raw, PALETTE["soft"], BOLD)
+
+
+def command_value(raw: str) -> str:
+    return paint(raw, PALETTE["bright"], BOLD)
 
 
 def main() -> int:
@@ -62,40 +107,48 @@ def main() -> int:
     sched = read_json(scheduler_path(target), {})
     config = load_model_config(args.model_config)
     selected = args.selected_model or sched.get("selectedModel") or "unknown"
-    audit_model = (sched.get("reviews") or {}).get("auditModel") or sched.get("codingAuditModel") or config.get("codingAuditModel") or "gpt-5.4"
+    audit_model = (
+        (sched.get("reviews") or {}).get("auditModel")
+        or sched.get("codingAuditModel")
+        or config.get("codingAuditModel")
+        or "gpt-5.4"
+    )
     state = sched.get("state") or "running"
     phase = sched.get("phase") or "phase-strategy"
     mode = sched.get("mode") or "direct-lane"
     profile = sched.get("profile") or ("coding" if args.subcommand == "coding" else "office")
     updated = sched.get("updatedAt") or "刚刚"
 
-    print("╭─── 🚀 iLongRun 启动看板 ────────────────────────────╮")
-    print("│                                                    │")
-    print(line("🆔 运行 ID", target.run_id))
-    print(line("📊 当前状态", f"🟢 后台运行（{zh(STATE_LABELS, state)}）"))
-    print(line("🎯 当前阶段", zh(PHASE_LABELS, phase)))
-    print(line("🔧 运行模式", zh(MODE_LABELS, mode)))
-    print(line("🌐 任务画像", zh(PROFILE_LABELS, profile)))
-    print(line("🤖 执行模型", f"{display_model_name(selected, config)} ({selected})"))
-    print(line("🔍 最终终审", f"{display_model_name(audit_model, config)} ({audit_model})"))
-    print(line("🕐 最近更新", updated))
-    print("│                                                    │")
-    print("╰────────────────────────────────────────────────────╯")
+    print(open_top(board_title("🚀", "启动看板"), tail_width=28))
+    print(left_border())
+    print(board_line("🆔 运行 ID", tone("soft", target.run_id)))
+    print(board_line("📊 当前状态", state_value(state)))
+    print(board_line("🎯 当前阶段", phase_value(phase, sched)))
+    print(board_line("🔧 运行模式", tone("warm", zh(MODE_LABELS, mode))))
+    print(board_line("🌐 任务画像", tone("warm", zh(PROFILE_LABELS, profile))))
+    print(board_line("🤖 执行模型", model_value(selected, config)))
+    print(board_line("🔍 最终终审", model_value(audit_model, config)))
+    print(board_line("🕐 最近更新", tone("soft", updated)))
+    print(left_border())
+    print(open_bottom())
     print("")
-    print("📁 路径")
-    print("──────────────────────────────────")
-    print(f"  工作区        {target.workspace}")
-    print(f"  运行目录      {target.run_dir}")
-    print(f"  日志文件      {args.log_file}")
-    print(f"  元信息文件    {args.meta_file}")
+
+    print(section_heading("📁 运行路径"))
+    print(section_rule())
+    print(detail_line("工作区", path_value(str(target.workspace))))
+    print(detail_line("运行目录", path_value(str(target.run_dir))))
+    print(detail_line("日志文件", path_value(args.log_file)))
+    print(detail_line("元信息", path_value(args.meta_file)))
     print("")
-    print("💡 快捷命令")
-    print("──────────────────────────────────")
-    print(f"  ilongrun-status {target.run_id}")
-    print(f"  ilongrun-resume {target.run_id}")
+
+    print(section_heading("⚡ 快捷命令"))
+    print(section_rule())
+    print(detail_line("查看状态", command_value(f"ilongrun-status {target.run_id}")))
+    print(detail_line("继续收敛", command_value(f"ilongrun-resume {target.run_id}")))
     print("")
-    print("📌 下一步建议")
-    print("──────────────────────────────────")
+
+    print(section_heading("💡 下一步建议"))
+    print(section_rule())
     print("  - 现在可以先关掉当前终端，iLongRun 会继续在后台推进。")
     print("  - 若想看完整状态，请执行上面的 ilongrun-status 命令。")
     print("  - 若任务中途受阻，可直接用 ilongrun-resume 继续收敛。")

@@ -71,6 +71,32 @@ def main() -> int:
         model_info_coding_payload = json.loads(model_info_coding.stdout)
         assert model_info_coding_payload["selected"] == "claude-opus-4.6"
 
+        doctor_log = temp_root / "doctor.log"
+        doctor_log.write_text(
+            "\n".join(
+                [
+                    "[OK] login: test-user@https://github.com",
+                    "[OK] /fleet: supported (probe-success) via Claude Sonnet 4.6",
+                    "[OK] ilongrun selftest passed",
+                    "[OK] legacy plugin not enabled: copilot-mission-control",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        install_board = run(
+            str(ROOT / "render_ilongrun_install_board.py"),
+            "--plugin-status", "installed",
+            "--plugin-source", "izscc/iLongRun",
+            "--doctor-log", str(doctor_log),
+            "--doctor-exit-code", "0",
+            "--command-bin-dir", str(temp_root / "bin"),
+            "--helper-dir", str(temp_root / "helpers"),
+            "--model-config", str(ROOT.parent / "config" / "model-policy.jsonc"),
+        )
+        assert "知识船仓·公益社区" in install_board.stdout
+        assert "====" in install_board.stdout
+
         coding_workspace = temp_root / "coding-workspace"
         coding_workspace.mkdir(parents=True, exist_ok=True)
         run(
@@ -84,6 +110,18 @@ def main() -> int:
         assert coding_sched.get("profile") == "coding"
         assert (coding_sched.get("mission") or {}).get("profile") == "coding"
         assert (coding_sched.get("reviews") or {}).get("required") is True
+        launch_board = run(
+            str(ROOT / "render_ilongrun_launch_board.py"),
+            "--workspace", str(coding_workspace),
+            "--run-id", coding_run_id,
+            "--subcommand", "coding",
+            "--log-file", str(coding_workspace / ".copilot-ilongrun" / "launcher" / "coding.log"),
+            "--meta-file", str(coding_workspace / ".copilot-ilongrun" / "launcher" / "coding.json"),
+            "--selected-model", "claude-opus-4.6",
+            "--model-config", str(ROOT.parent / "config" / "model-policy.jsonc"),
+        )
+        assert "启动看板" in launch_board.stdout
+        assert "ilongrun-status" in launch_board.stdout
         launched = run(
             str(ROOT / "notify_macos.py"),
             "--workspace", str(workspace),

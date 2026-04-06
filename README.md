@@ -291,7 +291,7 @@ iLongRun 不会盲目使用 `/fleet`。
 
 ### detached 启动看板
 
-从 v0.4.0 开始，`ilongrun` / `ilongrun-coding` / `ilongrun-resume` 的 detached 启动输出会统一成品牌化中文看板，展示：
+从 v0.4.0 开始，`ilongrun` / `ilongrun-coding` / `ilongrun-resume` 的 detached 启动输出会统一成品牌化中文看板，默认采用 **iLongRun 金黄色主题、右侧开口框、TTY 下品牌渐变标题**，展示：
 
 - run id
 - 当前状态 / 当前阶段 / 运行模式

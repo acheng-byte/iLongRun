@@ -3,8 +3,22 @@ from __future__ import annotations
 
 import argparse
 import os
-import unicodedata
 from pathlib import Path
+
+from _ilongrun_terminal_theme import (
+    BOLD,
+    PALETTE,
+    ad_box,
+    board_line,
+    board_title,
+    detail_line,
+    left_border,
+    open_bottom,
+    open_top,
+    paint,
+    section_heading,
+    section_rule,
+)
 
 COMMANDS = [
     ("ilongrun", "通用长跑入口"),
@@ -15,33 +29,6 @@ COMMANDS = [
     ("ilongrun-doctor", "环境体检 / 模型探测"),
     ("copilot-ilongrun", "高级兼容入口"),
 ]
-
-
-def display_width(text: str) -> int:
-    total = 0
-    for char in text:
-        if char in {"️", "︎"}:
-            continue
-        if unicodedata.combining(char):
-            continue
-        if unicodedata.east_asian_width(char) in {"F", "W"}:
-            total += 2
-        elif unicodedata.category(char) == "So":
-            total += 2
-        else:
-            total += 1
-    return total
-
-
-def pad_display(text: str, width: int) -> str:
-    current = display_width(text)
-    if current >= width:
-        return text
-    return text + (" " * (width - current))
-
-
-def line(label: str, value: str, label_width: int = 14) -> str:
-    return f"│  {pad_display(label, label_width)} {value}"
 
 
 def resolve_installed_command(bin_dir: str, name: str) -> str:
@@ -90,33 +77,53 @@ def parse_doctor_log(path: Path) -> dict[str, str | int]:
     return info
 
 
-def plugin_status_label(status: str, source: str) -> str:
+def tone(kind: str, text: str) -> str:
+    return paint(text, PALETTE[kind], BOLD)
+
+
+def plugin_status_label(status: str, source: str) -> tuple[str, str]:
     mapping = {
-        "installed": f"✅ 已安装（{source}）",
-        "failed": f"⚠️ 插件注册失败，已回退到本地命令（{source}）",
-        "skipped": "⚪ 未检测到 Copilot CLI，已跳过插件注册",
+        "installed": ("ok", f"✅ 已安装（{source}）"),
+        "failed": ("warn", f"⚠️ 插件注册失败，已回退到本地命令（{source}）"),
+        "skipped": ("soft", "⚪ 未检测到 Copilot CLI，已跳过插件注册"),
     }
-    return mapping.get(status, status)
+    return mapping.get(status, ("soft", status))
 
 
-def doctor_status_label(exit_code: int, info: dict[str, str | int]) -> str:
+def doctor_status_label(exit_code: int, info: dict[str, str | int]) -> tuple[str, str]:
     fail_count = int(info.get("fail_count", 0) or 0)
     warn_count = int(info.get("warn_count", 0) or 0)
     if exit_code == 0 and fail_count == 0:
-        return "✅ 自检通过"
+        return "ok", "✅ 自检通过"
     if fail_count > 0:
-        return f"⚠️ 自检发现 {fail_count} 项待处理"
+        return "warn", f"⚠️ 自检发现 {fail_count} 项待处理"
     if warn_count > 0:
-        return f"⚠️ 自检有 {warn_count} 条提醒"
-    return "⚠️ 自检完成，请查看提示"
+        return "warn", f"⚠️ 自检有 {warn_count} 条提醒"
+    return "warn", "⚠️ 自检完成，请查看提示"
 
 
-def install_status_label(plugin_status: str, doctor_exit: int, command_ready: bool) -> str:
+def install_status_label(plugin_status: str, doctor_exit: int, command_ready: bool) -> tuple[str, str]:
     if not command_ready:
-        return "❌ 安装未完成"
+        return "err", "❌ 安装未完成"
     if plugin_status == "failed" or doctor_exit != 0:
-        return "✅ 安装完成（附带提醒）"
-    return "✅ 安装成功"
+        return "warn", "✅ 安装完成（附带提醒）"
+    return "ok", "✅ 安装成功"
+
+
+def emphasize_path(path: str) -> str:
+    return paint(path, PALETTE["soft"], BOLD)
+
+
+def command_line(name: str, desc: str, ready: bool) -> str:
+    badge = tone("ok", "✅") if ready else tone("warn", "⚠️")
+    cmd_name = paint(f"{name:<16}", PALETTE["bright"], BOLD)
+    return f"  {badge} {cmd_name} {desc}"
+
+
+def command_summary(installed_count: int, total: int, ready: bool) -> str:
+    icon = "✅" if ready else "⚠️"
+    tone_key = "ok" if ready else "warn"
+    return tone(tone_key, f"{icon} {installed_count}/{total} 个命令可直接使用")
 
 
 def main() -> int:
@@ -136,83 +143,85 @@ def main() -> int:
     command_ready = installed_count == len(COMMANDS)
     path_ready = args.command_bin_dir in os.environ.get("PATH", "").split(":")
 
-    print("╭─── 🛠️ iLongRun 安装看板 ────────────────────────────")
-    print("│")
-    print(line("📦 安装状态", install_status_label(args.plugin_status, args.doctor_exit_code, command_ready)))
-    print(line("🧹 清理策略", "先彻底清理，再安装新版"))
-    print(line("🔌 插件注册", plugin_status_label(args.plugin_status, args.plugin_source)))
-    print(line("🧩 本地能力", "✅ skills / agents / helpers 已就绪"))
-    print(line("🚀 命令入口", f"✅ {installed_count}/{len(COMMANDS)} 个命令可直接使用"))
-    print(line("🛡️ 环境自检", doctor_status_label(args.doctor_exit_code, doctor_info)))
-    print("│")
-    print("╰────────────────────────────────────────────────────")
+    install_tone, install_text = install_status_label(args.plugin_status, args.doctor_exit_code, command_ready)
+    plugin_tone, plugin_text = plugin_status_label(args.plugin_status, args.plugin_source)
+    doctor_tone, doctor_text = doctor_status_label(args.doctor_exit_code, doctor_info)
+
+    print(open_top(board_title("🛠️", "安装看板"), tail_width=26))
+    print(left_border())
+    print(board_line("📦 安装状态", tone(install_tone, install_text)))
+    print(board_line("🧹 清理策略", tone("warm", "先彻底清理，再安装新版")))
+    print(board_line("🔌 插件注册", tone(plugin_tone, plugin_text)))
+    print(board_line("🧩 本地能力", tone("ok", "✅ skills / agents / helpers 已就绪")))
+    print(board_line("🚀 命令入口", command_summary(installed_count, len(COMMANDS), command_ready)))
+    print(board_line("🛡️ 环境自检", tone(doctor_tone, doctor_text)))
+    print(left_border())
+    print(open_bottom())
     print("")
 
-    print("📁 安装位置")
-    print("──────────────────────────────────")
-    print(f"  命令目录      {args.command_bin_dir}")
-    print(f"  Helper 目录   {args.helper_dir}")
-    print(f"  模型配置      {args.model_config}")
-    print(f"  插件来源      {args.plugin_source}")
+    print(section_heading("📁 安装位置"))
+    print(section_rule())
+    print(detail_line("命令目录", emphasize_path(args.command_bin_dir)))
+    print(detail_line("Helper 目录", emphasize_path(args.helper_dir)))
+    print(detail_line("模型配置", emphasize_path(args.model_config)))
+    print(detail_line("插件来源", tone("bright", args.plugin_source)))
     print("")
 
-    print("🎛️ 想改默认模型，就改这里")
-    print("──────────────────────────────────")
-    print(f"  配置文件      {args.model_config}")
-    print("  通用命令      改 commandDefaults")
-    print("  内部 skill     改 skillDefaults")
-    print("  最终终审      改 codingAuditModel")
-    print("  修改完成后    建议执行：ilongrun-doctor --refresh-model-cache")
+    print(section_heading("🎛️ 想改默认模型，就改这里"))
+    print(section_rule())
+    print(detail_line("配置文件", emphasize_path(args.model_config)))
+    print(detail_line("通用命令", tone("warm", "改 commandDefaults")))
+    print(detail_line("内部 skill", tone("warm", "改 skillDefaults")))
+    print(detail_line("最终终审", tone("warm", "改 codingAuditModel")))
+    print(detail_line("修改完成后", tone("soft", "建议执行：ilongrun-doctor --refresh-model-cache")))
     print("")
 
-    print("🧭 新手下一步")
-    print("──────────────────────────────────")
-    print('  1. 通用任务：ilongrun "用自然语言描述你的任务"')
-    print('  2. 代码任务：ilongrun-coding "实现功能并补测试，最后做终审"')
-    print('  3. 查看进度：ilongrun-status latest')
-    print('  4. 接着继续：ilongrun-resume latest')
-    print('  5. 环境体检：ilongrun-doctor')
-    print('  6. 刷新模型：ilongrun-doctor --refresh-model-cache')
+    print(section_heading("🧭 新手下一步"))
+    print(section_rule())
+    print(f"  1. 通用任务：{tone('bright', 'ilongrun')} \"用自然语言描述你的任务\"")
+    print(f"  2. 代码任务：{tone('bright', 'ilongrun-coding')} \"实现功能并补测试，最后做终审\"")
+    print(f"  3. 查看进度：{tone('bright', 'ilongrun-status')} latest")
+    print(f"  4. 接着继续：{tone('bright', 'ilongrun-resume')} latest")
+    print(f"  5. 环境体检：{tone('bright', 'ilongrun-doctor')}")
+    print(f"  6. 刷新模型：{tone('bright', 'ilongrun-doctor')} --refresh-model-cache")
     if os.uname().sysname == "Darwin":
-        print('  7. 提醒测试：ilongrun-doctor --notify-test')
+        print(f"  7. 提醒测试：{tone('bright', 'ilongrun-doctor')} --notify-test")
     print("")
 
-    print("📎 环境摘要")
-    print("──────────────────────────────────")
-    print(f"  Copilot 登录   {doctor_info['login']}")
-    print(f"  自检结果       {doctor_info['selftest']}")
-    print(f"  /fleet 能力    {doctor_info['fleet']}")
-    print(f"  旧插件冲突     {doctor_info['legacy']}")
+    print(section_heading("📎 环境摘要"))
+    print(section_rule())
+    print(detail_line("Copilot 登录", tone("soft", str(doctor_info["login"]))))
+    print(detail_line("自检结果", tone("soft", str(doctor_info["selftest"]))))
+    print(detail_line("/fleet 能力", tone("soft", str(doctor_info["fleet"]))))
+    print(detail_line("旧插件冲突", tone("soft", str(doctor_info["legacy"]))))
     print("")
 
-    print("🧰 命令清单")
-    print("──────────────────────────────────")
+    print(section_heading("🧰 命令清单"))
+    print(section_rule())
     for name, desc, path in resolved_commands:
-        if path:
-            print(f"  ✅ {name:<16} {desc}")
-        else:
-            print(f"  ⚠️ {name:<16} {desc}（当前未检测到）")
+        print(command_line(name, desc, bool(path)))
     print("")
 
     if path_ready:
-        print("🛣️ PATH 检查")
-        print("──────────────────────────────────")
-        print("  已检测到 ~/.local/bin 在当前 PATH 中，可以直接使用以上命令。")
+        print(section_heading("🛣️ PATH 检查"))
+        print(section_rule())
+        print(f"  已检测到 {tone('bright', '~/.local/bin')} 在当前 PATH 中，可以直接使用以上命令。")
         print("")
     else:
-        print("🛠️ 如果命令暂时找不到")
-        print("──────────────────────────────────")
-        print('  请把下面这行加入你的 shell 配置后重新打开终端：')
-        print('  export PATH="$HOME/.local/bin:$PATH"')
+        print(section_heading("🛠️ 如果命令暂时找不到"))
+        print(section_rule())
+        print("  请把下面这行加入你的 shell 配置后重新打开终端：")
+        print("  " + tone("soft", 'export PATH="$HOME/.local/bin:$PATH"'))
         print("")
 
     if args.doctor_exit_code == 0 and command_ready:
-        print("✅ 安装成功，iLongRun 已准备就绪。")
+        print(tone("ok", "✅ 安装成功，iLongRun 已准备就绪。"))
     elif command_ready:
-        print("✅ 安装已经完成，但还有少量环境提醒；按上面的引导先跑 `ilongrun-doctor` 看详情即可。")
+        print(tone("warn", "✅ 安装已经完成，但还有少量环境提醒；按上面的引导先跑 `ilongrun-doctor` 看详情即可。"))
     else:
-        print("⚠️ 安装已执行，但仍有命令未就绪；建议先执行 `ilongrun-doctor` 排查。")
-    print("iLongRun - 由 zscc.in 知识船仓·公益社区 倾力之作，欢迎加入我们，这里是终身学习者的后花园")
+        print(tone("warn", "⚠️ 安装已执行，但仍有命令未就绪；建议先执行 `ilongrun-doctor` 排查。"))
+    print("")
+    print(ad_box("iLongRun - 由 zscc.in 知识船仓·公益社区 倾力之作，欢迎加入我们，这里是终身学习者的后花园"))
     return 0
 
 

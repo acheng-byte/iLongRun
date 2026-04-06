@@ -36,6 +36,8 @@ disable-model-invocation: false
 - 对内置 phase / wave / mode / profile / control / backend / verdict 名称做中文化渲染。
 - 除非用户明确要求英文，否则**不要输出整块英文看板**，也不要把 section 标题写成英文。
 - 不要依赖固定宽度对齐——长 run-id、中文文本和路径可能打断列宽。
+- 默认遵循 **iLongRun 金黄色品牌主题**：若终端支持 ANSI，可把标题、边框、section 标题、字段标签渲染成金黄色 / 琥珀色；`iLongRun` 字样允许使用**静态渐变**，但不要输出持续闪烁或会污染日志的动画。
+- 所有框形看板默认采用**右侧开口**的品牌样式：顶部和底部只保留左侧起笔与横线，不要在右侧闭口；若当前环境不适合 ANSI，也要保持同样的开口框布局。
 
 ### 常见状态展示映射
 
@@ -107,18 +109,18 @@ disable-model-invocation: false
 ### 输出模板
 
 ```
-╭─── 🚀 iLongRun 状态看板 ────────────────────────────╮
-│                                                      │
-│  🆔 运行 ID    {run-id}                               │
-│  📊 当前状态   {state-emoji} {display-state}           │
-│  🎯 当前阶段   {display-phase-name}                    │
-│  🔧 运行模式   {display-mode}                          │
-│  🤖 执行模型   {display-model-name}                    │
-│  🌐 任务画像   {display-profile}                       │
-│  🔑 控制模式   {display-control-mode}                  │
-│  🕐 最近更新   {updatedAt}                             │
-│                                                      │
-╰──────────────────────────────────────────────────────╯
+╭─── 🚀 iLongRun 状态看板 ────────────────────────────
+│
+│  🆔 运行 ID    {run-id}
+│  📊 当前状态   {state-emoji} {display-state}
+│  🎯 当前阶段   {display-phase-name}
+│  🔧 运行模式   {display-mode}
+│  🤖 执行模型   {display-model-name}
+│  🌐 任务画像   {display-profile}
+│  🔑 控制模式   {display-control-mode}
+│  🕐 最近更新   {updatedAt}
+│
+╰──────────────────────────────────────────────────────
 
 📋 阶段进度
 ──────────────────────────────────
@@ -253,18 +255,18 @@ disable-model-invocation: false
 以下是一个 **office profile** 任务的典型输出（默认中文化）：
 
 ```
-╭─── 🚀 iLongRun 状态看板 ────────────────────────────╮
-│                                                      │
-│  🆔 运行 ID    20260406-225813-ilongrun-https-github  │
-│  📊 当前状态   🔄 进行中（running）                   │
-│  🎯 当前阶段   策略制定                              │
-│  🔧 运行模式   直连模式（direct-lane）               │
-│  🤖 执行模型   Claude Opus 4.6                       │
-│  🌐 任务画像   办公（office）                        │
-│  🔑 控制模式   启动器强制（launcher-enforced）       │
-│  🕐 最近更新   2026-04-06T14:58:14Z                  │
-│                                                      │
-╰──────────────────────────────────────────────────────╯
+╭─── 🚀 iLongRun 状态看板 ────────────────────────────
+│
+│  🆔 运行 ID    20260406-225813-ilongrun-https-github
+│  📊 当前状态   🔄 进行中（running）
+│  🎯 当前阶段   策略制定
+│  🔧 运行模式   直连模式（direct-lane）
+│  🤖 执行模型   Claude Opus 4.6
+│  🌐 任务画像   办公（office）
+│  🔑 控制模式   启动器强制（launcher-enforced）
+│  🕐 最近更新   2026-04-06T14:58:14Z
+│
+╰──────────────────────────────────────────────────────
 
 📋 阶段进度
 ──────────────────────────────────

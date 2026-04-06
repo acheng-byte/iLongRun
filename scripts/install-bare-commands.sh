@@ -131,6 +131,7 @@ fi
 helpers=(
   _ilongrun_shared.py
   _ilongrun_lib.py
+  _ilongrun_terminal_theme.py
   cleanup_legacy_workspace.py
   notify_macos.py
   prepare_ilongrun_run.py
