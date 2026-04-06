@@ -43,14 +43,14 @@ Usage:
   ilongrun-prompt "<task>"
   ilongrun-resume [run-id|latest]
   ilongrun-status [run-id|latest]
-  ilongrun-doctor [--refresh-model-cache]
+  ilongrun-doctor [--refresh-model-cache] [--notify-test]
 
 Advanced:
   copilot-ilongrun run [--detach] [--max-continues N] [--model MODEL] [--dry-run] <task>
   copilot-ilongrun prompt [--model MODEL] [--dry-run] <task>
   copilot-ilongrun resume [--detach] [--max-continues N] [--model MODEL] [run-id|latest]
   copilot-ilongrun status [run-id|latest]
-  copilot-ilongrun doctor [--refresh-model-cache]
+  copilot-ilongrun doctor [--refresh-model-cache] [--notify-test]
   copilot-ilongrun selftest
 EOF
 }
@@ -89,6 +89,7 @@ helper_path() {
 
 copilot_path() { find_bin_from_common_locations "$COPILOT_BIN"; }
 screen_path() { find_bin_from_common_locations "$SCREEN_BIN"; }
+terminal_notifier_path() { find_bin_from_common_locations terminal-notifier; }
 
 plugin_name_matches() {
   local json_file="$1"
@@ -225,8 +226,8 @@ PY
 }
 
 launch_detached_via_screen() {
-  local subcommand="$1" payload="$2" log_file="$3" meta_file="$4" selected_model="$5"
-  shift 5
+  local subcommand="$1" payload="$2" log_file="$3" meta_file="$4" selected_model="$5" run_ref="$6"
+  shift 6
   local screen_bin session_name joined workspace_q log_q
   screen_bin="$(screen_path || true)"
   [ -n "$screen_bin" ] || die "Detached mode requires screen"
@@ -248,22 +249,64 @@ PY
   printf '  log: %s\n' "$log_file"
   printf '  meta: %s\n' "$meta_file"
   printf '  status: ilongrun-status latest\n'
+  send_launch_notification "$subcommand" "$run_ref"
+}
+
+send_launch_notification() {
+  local subcommand="$1" run_ref="$2"
+  local helper event title subtitle message
+  helper="$(helper_path notify_macos.py || true)"
+  [ -n "$helper" ] || return 0
+  case "$subcommand" in
+    resume)
+      event="resumed"
+      title="iLongRun 已经接着跑起来了"
+      subtitle="任务正在后台继续进行"
+      message="你现在可以先去忙别的，iLongRun 会继续往前推进。"
+      ;;
+    *)
+      event="launched"
+      title="iLongRun 已经开始了"
+      subtitle="任务正在后台继续进行"
+      message="你现在可以关掉终端，稍后回来再看进度。"
+      ;;
+  esac
+  python3 "$helper" \
+    --workspace "$PWD" \
+    --run-id "$run_ref" \
+    --event "$event" \
+    --title "$title" \
+    --subtitle "$subtitle" \
+    --message "$message" \
+    >/dev/null 2>&1 || true
 }
 
 doctor() {
   local refresh_cache="${1:-0}"
+  local notify_test="${2:-0}"
   local issues=0
   local copilot_bin="$(copilot_path || true)"
   local screen_bin="$(screen_path || true)"
+  local mac_notifier="$(terminal_notifier_path || true)"
   local login="$(detect_copilot_login || true)"
   local helper_selftest="$(helper_path selftest_ilongrun.py || true)"
   local helper_probe="$(helper_path probe_models.py || true)"
   local helper_fleet_probe="$(helper_path probe_fleet_capability.py || true)"
+  local helper_notify="$(helper_path notify_macos.py || true)"
   ensure_model_paths || true
   if [ -n "$copilot_bin" ]; then printf '[OK] copilot: %s\n' "$copilot_bin"; else printf '[FAIL] copilot CLI not found\n'; issues=$((issues+1)); fi
   if [ -n "$login" ]; then printf '[OK] login: %s\n' "$login"; else printf '[FAIL] copilot login missing\n'; issues=$((issues+1)); fi
   if [ -f "$MODEL_CONFIG_PATH" ]; then printf '[OK] model policy: %s\n' "$MODEL_CONFIG_PATH"; else printf '[FAIL] model policy missing\n'; issues=$((issues+1)); fi
   if [ -n "$screen_bin" ]; then printf '[OK] screen: %s\n' "$screen_bin"; else printf '[WARN] screen missing; --detach unavailable\n'; fi
+  if [ "$(uname -s)" = "Darwin" ]; then
+    if [ -n "$mac_notifier" ]; then
+      printf '[OK] terminal-notifier: %s\n' "$mac_notifier"
+    elif [ -n "$helper_notify" ]; then
+      printf '[WARN] terminal-notifier missing; will fall back to osascript on macOS\n'
+    else
+      printf '[WARN] macOS notify helper missing\n'
+    fi
+  fi
   if [ -n "$helper_probe" ] && [ -n "$copilot_bin" ] && [ -n "$login" ]; then
     local cmd=(python3 "$helper_probe" --copilot-bin "$copilot_bin" --config "$MODEL_CONFIG_PATH" --cache "$MODEL_AVAILABILITY_PATH" --scope preferred)
     [ "$refresh_cache" = "1" ] && cmd+=(--refresh)
@@ -289,6 +332,33 @@ doctor() {
   else
     printf '[WARN] /fleet capability probe unavailable\n'
   fi
+  if [ "$notify_test" = "1" ]; then
+    printf '\n'
+    if [ "$(uname -s)" != "Darwin" ]; then
+      printf '[WARN] notify-test skipped: current system is not macOS\n'
+    elif [ -z "$helper_notify" ]; then
+      printf '[FAIL] notify-test skipped: notify_macos.py helper missing\n'
+      issues=$((issues+1))
+    else
+      if python3 "$helper_notify" \
+        --workspace "$PWD" \
+        --event attention \
+        --title "iLongRun 通知测试" \
+        --subtitle "这是一次提醒链路自检" \
+        --message "如果你没有看到这条提醒，请检查系统通知权限、专注模式和通知摘要。" \
+        --open "$PWD" \
+        --sound \
+        --dedupe-seconds 0 \
+        --group "ilongrun.doctor-test.$(date +%s)" >/dev/null 2>&1; then
+        printf '[OK] notify-test sent\n'
+        printf '  若 3 秒内没有看到横幅，请检查：系统设置 > 通知 > terminal-notifier（或 Script Editor）\n'
+        printf '  另外请确认未开启专注模式，且没有被归入通知摘要。\n'
+      else
+        printf '[FAIL] notify-test failed\n'
+        issues=$((issues+1))
+      fi
+    fi
+  fi
   [ "$issues" -eq 0 ]
 }
 
@@ -298,13 +368,15 @@ case "$subcmd" in
   help|-h|--help) usage; exit 0 ;;
   doctor)
     refresh_model_cache=0
+    notify_test=0
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --refresh-model-cache) refresh_model_cache=1; shift ;;
+        --notify-test) notify_test=1; shift ;;
         *) die "unknown option: $1" ;;
       esac
     done
-    doctor "$refresh_model_cache"
+    doctor "$refresh_model_cache" "$notify_test"
     exit $?
     ;;
   selftest)
@@ -404,7 +476,8 @@ if [ "$detach" -eq 1 ] && { [ "$subcmd" = "run" ] || [ "$subcmd" = "resume" ]; }
   ts="$(date +%Y%m%d-%H%M%S)"
   log_file="$launcher_dir/${subcmd}-${ts}.log"
   meta_file="$launcher_dir/${subcmd}-${ts}.json"
-  launch_detached_via_screen "$subcmd" "$payload_text" "$log_file" "$meta_file" "$selected_model" "${supervisor_cmd[@]}"
+  launch_run_ref="${prepared_run_id:-$payload_text}"
+  launch_detached_via_screen "$subcmd" "$payload_text" "$log_file" "$meta_file" "$selected_model" "$launch_run_ref" "${supervisor_cmd[@]}"
   exit 0
 fi
 

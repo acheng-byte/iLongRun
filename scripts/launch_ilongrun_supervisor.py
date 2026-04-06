@@ -308,6 +308,26 @@ def patch_scheduler(workspace: Path, run_ref: str | None, *, selected_model: str
     write_json_atomic(scheduler_path(target), sched)
 
 
+def notify_event(workspace: Path, run_ref: str | None, event: str, *, title: str, subtitle: str, message: str, sound: bool = False) -> None:
+    helper = SCRIPT_DIR / "notify_macos.py"
+    if not helper.exists():
+        return
+    cmd = [
+        sys.executable,
+        str(helper),
+        "--workspace", str(workspace),
+        "--event", event,
+        "--title", title,
+        "--subtitle", subtitle,
+        "--message", message,
+    ]
+    if run_ref:
+        cmd.extend(["--run-id", run_ref])
+    if sound:
+        cmd.append("--sound")
+    subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def maybe_finalize_complete(workspace: Path, run_ref: str) -> bool:
     try:
         target = resolve_run_target(workspace, run_ref)
@@ -435,6 +455,7 @@ def main() -> int:
             f"{args.payload}"
         ).strip()
 
+    notified_recovery = False
     for index, model in enumerate(chain):
         human = display_model_name(model, config)
         print(f"[ILongRun] attempt {index + 1}/{len(chain)} with model: {human} ({model})")
@@ -469,6 +490,16 @@ def main() -> int:
                 maybe_finalize_blocked(workspace, run_ref, "ILongRun launcher run failed without model fallback")
             return rc or 1
         patch_scheduler(workspace, run_ref, selected_model=model, fallback_reason=fallback_reason)
+        if not notified_recovery and args.mode in {"run", "resume"} and run_ref:
+            notify_event(
+                workspace,
+                run_ref,
+                "recovery",
+                title="iLongRun 正在自己换路继续",
+                subtitle="刚才那一步没有走通",
+                message="现在先不用守着，iLongRun 还在继续处理。",
+            )
+            notified_recovery = True
         if args.mode in {"run", "resume"} and args.resume_skill_ref:
             current_skill = args.resume_skill_ref
             current_payload = run_ref or "latest"

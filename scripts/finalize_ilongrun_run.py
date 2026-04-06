@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -47,6 +48,27 @@ def build_completion_markdown(sched: dict, headline: str, status_name: str, veri
     return "\n".join(lines) + "\n"
 
 
+def notify(target, event: str, *, title: str, subtitle: str, message: str, open_path: Path | None = None, sound: bool = False) -> None:
+    helper = SCRIPT_DIR / "notify_macos.py"
+    if not helper.exists():
+        return
+    cmd = [
+        sys.executable,
+        str(helper),
+        "--workspace", str(target.workspace),
+        "--run-id", target.run_id,
+        "--event", event,
+        "--title", title,
+        "--subtitle", subtitle,
+        "--message", message,
+    ]
+    if open_path:
+        cmd.extend(["--open", str(open_path)])
+    if sound:
+        cmd.append("--sound")
+    subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Finalize an ILongRun mission")
     parser.add_argument("--workspace", default=".")
@@ -88,6 +110,14 @@ def main() -> int:
         sched["updatedAt"] = __import__('datetime').datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
         sync_projections(target, sched)
         write_json_atomic(scheduler_path(target), sched)
+        notify(
+            target,
+            "attention",
+            title="iLongRun 需要你回来看看",
+            subtitle="有一项检查没有通过",
+            message="任务还在，当前进度也已经保留下来了。",
+            sound=True,
+        )
         if args.do_print:
             print(json.dumps(sched, ensure_ascii=False, indent=2))
         return 1
@@ -109,7 +139,28 @@ def main() -> int:
     sched["updatedAt"] = __import__('datetime').datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
     sync_projections(target, sched)
     write_json_atomic(scheduler_path(target), sched)
-    write_text_atomic(completion_path(target), build_completion_markdown(sched, args.headline, args.status, args.verification_item, args.blocker))
+    completion_file = completion_path(target)
+    write_text_atomic(completion_file, build_completion_markdown(sched, args.headline, args.status, args.verification_item, args.blocker))
+    if args.status == "complete":
+        notify(
+            target,
+            "complete",
+            title="iLongRun 已经完成了",
+            subtitle="结果已经整理好了",
+            message="点一下就能打开结果摘要。",
+            open_path=completion_file if completion_file.exists() else None,
+            sound=True,
+        )
+    else:
+        notify(
+            target,
+            "blocked",
+            title="iLongRun 暂时停住了",
+            subtitle="需要你补一个决定或输入",
+            message="点一下查看当前情况，再决定下一步。",
+            open_path=completion_file if completion_file.exists() else None,
+            sound=True,
+        )
     if args.do_print:
         print(json.dumps(sched, ensure_ascii=False, indent=2))
     return 0

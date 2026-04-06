@@ -1,5 +1,26 @@
 # 更新日志
 
+## v0.3.0
+
+macOS 通知链路回归：把 LongRun 中成熟的系统提醒能力按 iLongRun 当前架构完整补回。
+
+### 新增
+- **`notify_macos.py` helper**：支持 `launched` / `resumed` / `recovery` / `attention` / `complete` / `blocked` / `checkpoint` 七类通知事件
+- **后端回退链路**：优先 `terminal-notifier`，不可用时自动回退到 `osascript`
+- **通知去重状态**：写入 `.copilot-ilongrun/state/notify-<run-id>.json`，避免短时间重复轰炸
+- **`ilongrun-doctor --notify-test`**：可主动发送一条 macOS 测试通知，检查权限与提醒链路
+
+### 增强
+- **launcher**：`ilongrun` / `ilongrun-resume` detached 启动成功后会发送 `launched` / `resumed` 通知
+- **supervisor**：首次模型 fallback / 自动恢复时发送 `recovery` 通知
+- **finalize**：complete precheck 失败时发送 `attention`；真正 `complete` / `blocked` 时发送结果通知
+- **安装脚本**：Darwin 环境优先准备 `terminal-notifier`，失败后保底回退基础 macOS 通知
+- **selftest**：新增通知 helper dry-run 测试，覆盖 launched / complete 与打开目标解析
+
+### 文档
+- 新增 `docs/发版说明-v0.3.0.md`
+- README、快速开始与 doctor 说明补充通知自检命令参考
+
 ## v0.2.1
 
 状态看板中文化升级：聚焦 `ilongrun-status` 的终端呈现体验，让默认输出从“英文结构化看板”升级为“中文结构化看板”。

@@ -53,8 +53,10 @@ curl -fsSL https://raw.githubusercontent.com/izscc/iLongRun/main/install.sh | ba
 
 ```bash
 ilongrun-doctor --refresh-model-cache
+ilongrun-doctor --notify-test
 ```
 
+> 第二条用于 **macOS 通知链路自检**。如果没有看到提醒横幅，请检查系统通知权限、专注模式和通知摘要。
 > 如果本机 `copilot plugin install` 可用，安装脚本会尝试顺手注册插件；如果插件注册失败，也不会影响本地 skills + launchers 的使用。
 
 ---
@@ -104,7 +106,7 @@ copilot-ilongrun
 
 - `ilongrun`：推荐主入口
 - `copilot-ilongrun`：兼容 / 高级入口
-- `ilongrun-doctor`：环境、自检、模型、`/fleet` 能力探测
+- `ilongrun-doctor`：环境、自检、模型、`/fleet` 能力探测、macOS 通知自检
 
 ---
 
@@ -258,6 +260,7 @@ flowchart TD
 
 - [快速开始](./docs/快速开始.md)
 - [架构与运行机制](./docs/架构与运行机制.md)
+- [发版说明 v0.3.0](./docs/发版说明-v0.3.0.md)
 - [发版说明 v0.2.1](./docs/发版说明-v0.2.1.md)
 - [发版说明 v0.2.0](./docs/发版说明-v0.2.0.md)
 - [发版说明 v0.1.0](./docs/发版说明-v0.1.0.md)

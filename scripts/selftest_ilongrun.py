@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -10,8 +11,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 
 
-def run(*args: str, ok: bool = True):
-    proc = subprocess.run(["python3", *args], capture_output=True, text=True)
+def run(*args: str, ok: bool = True, env: dict[str, str] | None = None):
+    proc = subprocess.run(
+        ["python3", *args],
+        capture_output=True,
+        text=True,
+        env={**os.environ, **(env or {})},
+    )
     if ok and proc.returncode != 0:
         raise RuntimeError(f"command failed: {args}\nstdout={proc.stdout}\nstderr={proc.stderr}")
     return proc
@@ -19,6 +25,11 @@ def run(*args: str, ok: bool = True):
 
 def read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def assert_notify_target(payload: dict, expected: Path) -> None:
+    assert payload["backend"] in {"terminal-notifier", "osascript", "none"}
+    assert payload.get("resolvedOpen", "") == str(expected.resolve())
 
 
 def main() -> int:
@@ -39,6 +50,27 @@ def main() -> int:
         assert (run_dir / "plan.md").exists()
         assert (run_dir / "scheduler.json").exists()
         assert list(run_dir.glob("task-list-*.md"))
+        launched = run(
+            str(ROOT / "notify_macos.py"),
+            "--workspace", str(workspace),
+            "--run-id", run_id,
+            "--event", "launched",
+            "--dry-run",
+        )
+        launched_result = json.loads(launched.stdout)
+        assert_notify_target(launched_result, run_dir / "plan.md")
+
+        (run_dir / "COMPLETION.md").write_text("# completion\n", encoding="utf-8")
+        complete_notify = run(
+            str(ROOT / "notify_macos.py"),
+            "--workspace", str(workspace),
+            "--run-id", run_id,
+            "--event", "complete",
+            "--dry-run",
+        )
+        complete_result = json.loads(complete_notify.stdout)
+        assert_notify_target(complete_result, run_dir / "COMPLETION.md")
+        (run_dir / "COMPLETION.md").unlink()
 
         scheduler = read_json(run_dir / "scheduler.json")
         workstreams = scheduler.get("workstreams") or []
@@ -59,6 +91,7 @@ def main() -> int:
             "--headline", "should fail without GPT-5.4 review",
             "--local-verify",
             ok=False,
+            env={"ILONGRUN_NOTIFICATIONS": "0"},
         )
         assert failed.returncode != 0
 
@@ -76,6 +109,7 @@ def main() -> int:
             "--status", "complete",
             "--headline", "finalized with review",
             "--local-verify",
+            env={"ILONGRUN_NOTIFICATIONS": "0"},
         )
         assert ok_finalize.returncode == 0
         final_scheduler = read_json(run_dir / "scheduler.json")

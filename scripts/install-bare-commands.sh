@@ -41,6 +41,70 @@ install_copied_file() {
 HELPER_REFS_DIR="$ILONGRUN_HOME/references"
 mkdir -p "$TARGET_SKILLS_DIR" "$TARGET_AGENTS_DIR" "$HELPER_BIN_DIR" "$HELPER_CONFIG_DIR" "$HELPER_REFS_DIR"
 
+find_bin_from_common_locations() {
+  local name="$1"
+  local path
+  for path in \
+    "$HOME/.local/bin/$name" \
+    "/opt/homebrew/bin/$name" \
+    "/usr/local/bin/$name" \
+    "$HOME/bin/$name"
+  do
+    [ -x "$path" ] && { printf '%s\n' "$path"; return 0; }
+  done
+  command -v "$name" 2>/dev/null || true
+}
+
+log() {
+  printf '%s\n' "$*"
+}
+
+maybe_install_terminal_notifier() {
+  [ "$(uname -s)" = "Darwin" ] || return 0
+  if find_bin_from_common_locations terminal-notifier >/dev/null 2>&1; then
+    log "Enhanced macOS notifications ready: $(find_bin_from_common_locations terminal-notifier)"
+    return 0
+  fi
+
+  if command -v curl >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then
+    local tmp_dir archive_url bin_target app_target
+    tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ilongrun-notifier.XXXXXX")"
+    archive_url="https://github.com/julienXX/terminal-notifier/releases/download/2.0.0/terminal-notifier-2.0.0.zip"
+    bin_target="$HOME/.local/bin/terminal-notifier"
+    app_target="$HOME/.local/share/terminal-notifier.app"
+    log "Installing terminal-notifier from official release bundle..."
+    if curl -fsSL "$archive_url" -o "$tmp_dir/terminal-notifier.zip" \
+      && unzip -q "$tmp_dir/terminal-notifier.zip" -d "$tmp_dir" \
+      && [ -x "$tmp_dir/terminal-notifier.app/Contents/MacOS/terminal-notifier" ]; then
+      mkdir -p "$(dirname "$bin_target")" "$(dirname "$app_target")"
+      rm -rf "$app_target"
+      cp -R "$tmp_dir/terminal-notifier.app" "$app_target"
+      cat > "$bin_target" <<EOF2
+#!/usr/bin/env bash
+exec "$app_target/Contents/MacOS/terminal-notifier" "\$@"
+EOF2
+      chmod +x "$bin_target"
+      rm -rf "$tmp_dir"
+      log "Installed terminal-notifier app bundle to $app_target"
+      log "Installed terminal-notifier launcher to $bin_target"
+      return 0
+    fi
+    rm -rf "$tmp_dir"
+  fi
+
+  if command -v brew >/dev/null 2>&1; then
+    log "Installing terminal-notifier for enhanced macOS notifications..."
+    if brew install terminal-notifier >/dev/null 2>&1; then
+      log "Installed terminal-notifier via Homebrew."
+      return 0
+    fi
+    log "Could not install terminal-notifier automatically; iLongRun will fall back to basic macOS notifications."
+    return 0
+  fi
+
+  log "Homebrew not found; iLongRun will fall back to basic macOS notifications."
+}
+
 for skill_dir in "$ROOT_DIR"/skills/*; do
   [ -d "$skill_dir" ] || continue
   skill_name="$(basename "$skill_dir")"
@@ -67,6 +131,7 @@ fi
 helpers=(
   _ilongrun_shared.py
   _ilongrun_lib.py
+  notify_macos.py
   prepare_ilongrun_run.py
   write_ilongrun_scheduler.py
   reconcile_ilongrun_run.py
@@ -85,6 +150,8 @@ for helper in "${helpers[@]}"; do
   chmod +x "$HELPER_BIN_DIR/$helper"
   printf 'Installed helper: %s\n' "$HELPER_BIN_DIR/$helper"
 done
+
+maybe_install_terminal_notifier
 
 install_copied_file "$ROOT_DIR/config/model-policy.json" "$HELPER_CONFIG_DIR/model-policy.json"
 printf 'Installed model policy: %s\n' "$HELPER_CONFIG_DIR/model-policy.json"
