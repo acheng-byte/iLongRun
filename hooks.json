@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "HOOK_HELPER=\"${ILONGRUN_HOME:-$HOME/.copilot-ilongrun}/bin/hook_event.py\"; if [ -f \"$HOOK_HELPER\" ]; then python3 \"$HOOK_HELPER\"; else exit 0; fi",
+        "powershell": "$root = if ($env:ILONGRUN_HOME) { $env:ILONGRUN_HOME } else { Join-Path $HOME '.copilot-ilongrun' }; $helper = Join-Path $root 'bin/hook_event.py'; if (Test-Path $helper) { python $helper } else { exit 0 }",
+        "env": { "HOOK_EVENT": "sessionStart" },
+        "timeoutSec": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "HOOK_HELPER=\"${ILONGRUN_HOME:-$HOME/.copilot-ilongrun}/bin/hook_event.py\"; if [ -f \"$HOOK_HELPER\" ]; then python3 \"$HOOK_HELPER\"; else exit 0; fi",
+        "powershell": "$root = if ($env:ILONGRUN_HOME) { $env:ILONGRUN_HOME } else { Join-Path $HOME '.copilot-ilongrun' }; $helper = Join-Path $root 'bin/hook_event.py'; if (Test-Path $helper) { python $helper } else { exit 0 }",
+        "env": { "HOOK_EVENT": "sessionEnd" },
+        "timeoutSec": 10
+      }
+    ],
+    "errorOccurred": [
+      {
+        "type": "command",
+        "bash": "HOOK_HELPER=\"${ILONGRUN_HOME:-$HOME/.copilot-ilongrun}/bin/hook_event.py\"; if [ -f \"$HOOK_HELPER\" ]; then python3 \"$HOOK_HELPER\"; else exit 0; fi",
+        "powershell": "$root = if ($env:ILONGRUN_HOME) { $env:ILONGRUN_HOME } else { Join-Path $HOME '.copilot-ilongrun' }; $helper = Join-Path $root 'bin/hook_event.py'; if (Test-Path $helper) { python $helper } else { exit 0 }",
+        "env": { "HOOK_EVENT": "errorOccurred" },
+        "timeoutSec": 10
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "HOOK_HELPER=\"${ILONGRUN_HOME:-$HOME/.copilot-ilongrun}/bin/hook_event.py\"; if [ -f \"$HOOK_HELPER\" ]; then python3 \"$HOOK_HELPER\"; else exit 0; fi",
+        "powershell": "$root = if ($env:ILONGRUN_HOME) { $env:ILONGRUN_HOME } else { Join-Path $HOME '.copilot-ilongrun' }; $helper = Join-Path $root 'bin/hook_event.py'; if (Test-Path $helper) { python $helper } else { exit 0 }",
+        "env": { "HOOK_EVENT": "preToolUse" },
+        "timeoutSec": 10
+      }
+    ]
+  }
+}

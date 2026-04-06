@@ -1,0 +1,411 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLUGIN_NAME="ilongrun"
+PLUGIN_REPO_SLUG="izscc/iLongRun"
+DEFAULT_COPILOT_BIN="copilot"
+DEFAULT_SCREEN_BIN="screen"
+DEFAULT_MAX_CONTINUES="${COPILOT_ILONGRUN_MAX_CONTINUES:-120}"
+ILONGRUN_HOME="${ILONGRUN_HOME:-$HOME/.copilot-ilongrun}"
+HELPER_BIN_DIR="$ILONGRUN_HOME/bin"
+HELPER_CONFIG_DIR="$ILONGRUN_HOME/config"
+MODEL_CONFIG_PATH_DEFAULT="$HELPER_CONFIG_DIR/model-policy.json"
+MODEL_AVAILABILITY_PATH_DEFAULT="$HELPER_CONFIG_DIR/model-availability.json"
+LAUNCHER_DIR_NAME=".copilot-ilongrun/launcher"
+COPILOT_CONFIG_DIR="${COPILOT_CONFIG_DIR:-$HOME/.copilot}"
+COPILOT_BIN="${COPILOT_BIN:-$DEFAULT_COPILOT_BIN}"
+SCREEN_BIN="${SCREEN_BIN:-$DEFAULT_SCREEN_BIN}"
+
+resolve_script_dir() {
+  local source="${BASH_SOURCE[0]}"
+  while [ -L "$source" ]; do
+    local dir
+    dir="$(cd -P "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    [[ "$source" != /* ]] && source="$dir/$source"
+  done
+  cd -P "$(dirname "$source")" && pwd
+}
+
+SCRIPT_DIR="$(resolve_script_dir)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+MODEL_CONFIG_PATH="$MODEL_CONFIG_PATH_DEFAULT"
+MODEL_AVAILABILITY_PATH="$MODEL_AVAILABILITY_PATH_DEFAULT"
+SKILL_MODE=""
+PLUGIN_ARGS=()
+RESOLVED_SKILL_REF=""
+RESOLVED_RESUME_SKILL_REF=""
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ilongrun "<task>"
+  ilongrun-prompt "<task>"
+  ilongrun-resume [run-id|latest]
+  ilongrun-status [run-id|latest]
+  ilongrun-doctor [--refresh-model-cache]
+
+Advanced:
+  copilot-ilongrun run [--detach] [--max-continues N] [--model MODEL] [--dry-run] <task>
+  copilot-ilongrun prompt [--model MODEL] [--dry-run] <task>
+  copilot-ilongrun resume [--detach] [--max-continues N] [--model MODEL] [run-id|latest]
+  copilot-ilongrun status [run-id|latest]
+  copilot-ilongrun doctor [--refresh-model-cache]
+  copilot-ilongrun selftest
+EOF
+}
+
+die() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
+
+find_bin_from_common_locations() {
+  local name="$1"
+  local path
+  for path in \
+    "$HOME/.local/bin/$name" \
+    "/opt/homebrew/bin/$name" \
+    "/usr/local/bin/$name" \
+    "$HOME/bin/$name"
+  do
+    [ -x "$path" ] && { printf '%s\n' "$path"; return 0; }
+  done
+  command -v "$name" 2>/dev/null || true
+}
+
+helper_path() {
+  local name="$1"
+  if [ -x "$HELPER_BIN_DIR/$name" ]; then
+    printf '%s\n' "$HELPER_BIN_DIR/$name"
+    return 0
+  fi
+  if [ -x "$REPO_ROOT/scripts/$name" ]; then
+    printf '%s\n' "$REPO_ROOT/scripts/$name"
+    return 0
+  fi
+  return 1
+}
+
+copilot_path() { find_bin_from_common_locations "$COPILOT_BIN"; }
+screen_path() { find_bin_from_common_locations "$SCREEN_BIN"; }
+
+plugin_name_matches() {
+  local json_file="$1"
+  [ -f "$json_file" ] || return 1
+  python3 - "$json_file" "$PLUGIN_NAME" <<'PY' >/dev/null 2>&1
+import json, sys
+from pathlib import Path
+obj = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+raise SystemExit(0 if obj.get('name') == sys.argv[2] else 1)
+PY
+}
+
+installed_plugin_root() {
+  local plugin_dir="$COPILOT_CONFIG_DIR/installed-plugins"
+  [ -d "$plugin_dir" ] || return 1
+  while read -r f; do
+    if plugin_name_matches "$f"; then
+      dirname "$f"
+      return 0
+    fi
+  done < <(find "$plugin_dir" -maxdepth 4 -type f -name plugin.json 2>/dev/null)
+  return 1
+}
+
+has_personal_skill() {
+  local name="$1"
+  [ -d "$HOME/.copilot/skills/$name" ] || [ -L "$HOME/.copilot/skills/$name" ]
+}
+
+resolve_skill_ref() {
+  local name="$1"
+  if has_personal_skill "$name"; then
+    SKILL_MODE="bare"
+    PLUGIN_ARGS=()
+    RESOLVED_SKILL_REF="/$name"
+    return 0
+  fi
+  if plugin_name_matches "$REPO_ROOT/plugin.json"; then
+    SKILL_MODE="local-plugin-dir"
+    PLUGIN_ARGS=("$REPO_ROOT")
+    RESOLVED_SKILL_REF="/$PLUGIN_NAME:$name"
+    return 0
+  fi
+  local installed_root
+  installed_root="$(installed_plugin_root || true)"
+  if [ -n "$installed_root" ]; then
+    SKILL_MODE="installed-plugin"
+    PLUGIN_ARGS=()
+    RESOLVED_SKILL_REF="/$PLUGIN_NAME:$name"
+    return 0
+  fi
+  return 1
+}
+
+detect_copilot_login() {
+  if [ -n "${COPILOT_GITHUB_TOKEN:-}" ]; then printf 'env:COPILOT_GITHUB_TOKEN\n'; return 0; fi
+  if [ -n "${GH_TOKEN:-}" ]; then printf 'env:GH_TOKEN\n'; return 0; fi
+  if [ -n "${GITHUB_TOKEN:-}" ]; then printf 'env:GITHUB_TOKEN\n'; return 0; fi
+  local config_json="$COPILOT_CONFIG_DIR/config.json"
+  [ -f "$config_json" ] || return 1
+  python3 - "$config_json" <<'PY'
+import json, sys
+from pathlib import Path
+obj = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+last = obj.get('last_logged_in_user') or {}
+login = last.get('login')
+host = last.get('host') or 'https://github.com'
+if login:
+    print(f"{login}@{host}")
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+ensure_model_paths() {
+  if [ -f "$MODEL_CONFIG_PATH_DEFAULT" ]; then
+    MODEL_CONFIG_PATH="$MODEL_CONFIG_PATH_DEFAULT"
+  else
+    MODEL_CONFIG_PATH="$REPO_ROOT/config/model-policy.json"
+  fi
+  if [ -f "$MODEL_AVAILABILITY_PATH_DEFAULT" ]; then
+    MODEL_AVAILABILITY_PATH="$MODEL_AVAILABILITY_PATH_DEFAULT"
+  else
+    MODEL_AVAILABILITY_PATH="$REPO_ROOT/config/model-availability.json"
+  fi
+  [ -f "$MODEL_CONFIG_PATH" ] || die "ilongrun model policy not found"
+}
+
+preflight_or_die() {
+  COPILOT_REAL_BIN="$(copilot_path || true)"
+  [ -n "$COPILOT_REAL_BIN" ] || die "copilot CLI not found"
+  ensure_model_paths
+  detect_copilot_login >/dev/null 2>&1 || die "copilot CLI is not authenticated. Run: copilot login"
+}
+
+selected_model_for_payload() {
+  local payload="$1"
+  local explicit_model="${2:-}"
+  local helper
+  helper="$(helper_path model_policy_info.py || true)"
+  [ -n "$helper" ] || { printf 'claude-opus-4.6\n'; return 0; }
+  local cmd=(python3 "$helper" --config "$MODEL_CONFIG_PATH" --availability-cache "$MODEL_AVAILABILITY_PATH" --payload "$payload" --json)
+  [ -n "$explicit_model" ] && cmd+=(--explicit-model "$explicit_model")
+  "${cmd[@]}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["selected"])'
+}
+
+shell_join() {
+  python3 - "$@" <<'PY'
+import shlex, sys
+print(shlex.join(sys.argv[1:]))
+PY
+}
+
+write_meta() {
+  local path="$1" subcommand="$2" payload="$3" log_file="$4" mode="$5" command_line="$6" selected_model="$7"
+  python3 - "$path" "$subcommand" "$payload" "$log_file" "$mode" "$command_line" "$selected_model" <<'PY'
+import json, os, sys
+from datetime import datetime, timezone
+from pathlib import Path
+path = Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+obj = {
+    'startedAt': datetime.now(timezone.utc).isoformat(),
+    'cwd': os.getcwd(),
+    'subcommand': sys.argv[2],
+    'payload': sys.argv[3],
+    'logFile': sys.argv[4],
+    'skillResolution': sys.argv[5],
+    'command': sys.argv[6],
+    'selectedModel': sys.argv[7],
+}
+path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+PY
+}
+
+launch_detached_via_screen() {
+  local subcommand="$1" payload="$2" log_file="$3" meta_file="$4" selected_model="$5"
+  shift 5
+  local screen_bin session_name joined workspace_q log_q
+  screen_bin="$(screen_path || true)"
+  [ -n "$screen_bin" ] || die "Detached mode requires screen"
+  session_name="ilongrun-${subcommand}-$(date +%Y%m%d-%H%M%S)"
+  joined="$(shell_join "$@")"
+  workspace_q="$(python3 - <<'PY' "$PWD"
+import shlex,sys
+print(shlex.quote(sys.argv[1]))
+PY
+)"
+  log_q="$(python3 - <<'PY' "$log_file"
+import shlex,sys
+print(shlex.quote(sys.argv[1]))
+PY
+)"
+  "$screen_bin" -dmS "$session_name" bash -lc "cd $workspace_q && $joined >> $log_q 2>&1"
+  write_meta "$meta_file" "$subcommand" "$payload" "$log_file" "$SKILL_MODE" "$joined" "$selected_model"
+  printf '[OK] detached session started: %s\n' "$session_name"
+  printf '  log: %s\n' "$log_file"
+  printf '  meta: %s\n' "$meta_file"
+  printf '  status: ilongrun-status latest\n'
+}
+
+doctor() {
+  local refresh_cache="${1:-0}"
+  local issues=0
+  local copilot_bin="$(copilot_path || true)"
+  local screen_bin="$(screen_path || true)"
+  local login="$(detect_copilot_login || true)"
+  local helper_selftest="$(helper_path selftest_ilongrun.py || true)"
+  local helper_probe="$(helper_path probe_models.py || true)"
+  local helper_fleet_probe="$(helper_path probe_fleet_capability.py || true)"
+  ensure_model_paths || true
+  if [ -n "$copilot_bin" ]; then printf '[OK] copilot: %s\n' "$copilot_bin"; else printf '[FAIL] copilot CLI not found\n'; issues=$((issues+1)); fi
+  if [ -n "$login" ]; then printf '[OK] login: %s\n' "$login"; else printf '[FAIL] copilot login missing\n'; issues=$((issues+1)); fi
+  if [ -f "$MODEL_CONFIG_PATH" ]; then printf '[OK] model policy: %s\n' "$MODEL_CONFIG_PATH"; else printf '[FAIL] model policy missing\n'; issues=$((issues+1)); fi
+  if [ -n "$screen_bin" ]; then printf '[OK] screen: %s\n' "$screen_bin"; else printf '[WARN] screen missing; --detach unavailable\n'; fi
+  if [ -n "$helper_probe" ] && [ -n "$copilot_bin" ] && [ -n "$login" ]; then
+    local cmd=(python3 "$helper_probe" --copilot-bin "$copilot_bin" --config "$MODEL_CONFIG_PATH" --cache "$MODEL_AVAILABILITY_PATH" --scope preferred)
+    [ "$refresh_cache" = "1" ] && cmd+=(--refresh)
+    "${cmd[@]}" | sed 's/^/  /'
+  fi
+  if [ -n "$helper_selftest" ]; then
+    if python3 "$helper_selftest" >/tmp/ilongrun-selftest.out 2>/tmp/ilongrun-selftest.err; then
+      printf '[OK] ilongrun selftest passed\n'
+    else
+      printf '[FAIL] ilongrun selftest failed\n'
+      sed 's/^/  /' /tmp/ilongrun-selftest.err >&2 || true
+      issues=$((issues+1))
+    fi
+  fi
+  if [ -n "$helper_fleet_probe" ] && [ -n "$copilot_bin" ] && [ -n "$login" ]; then
+    local probe_cmd=(python3 "$helper_fleet_probe" --copilot-bin "$copilot_bin" --model-config "$MODEL_CONFIG_PATH" --availability-cache "$MODEL_AVAILABILITY_PATH")
+    [ "$refresh_cache" = "1" ] && probe_cmd+=(--refresh)
+    if fleet_line="$("${probe_cmd[@]}" 2>/dev/null)"; then
+      printf '[OK] %s\n' "$fleet_line"
+    else
+      printf '[WARN] /fleet capability probe could not confirm support\n'
+    fi
+  else
+    printf '[WARN] /fleet capability probe unavailable\n'
+  fi
+  [ "$issues" -eq 0 ]
+}
+
+subcmd="${1:-help}"
+shift || true
+case "$subcmd" in
+  help|-h|--help) usage; exit 0 ;;
+  doctor)
+    refresh_model_cache=0
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --refresh-model-cache) refresh_model_cache=1; shift ;;
+        *) die "unknown option: $1" ;;
+      esac
+    done
+    doctor "$refresh_model_cache"
+    exit $?
+    ;;
+  selftest)
+    helper="$(helper_path selftest_ilongrun.py || true)"
+    [ -n "$helper" ] || die "selftest helper missing"
+    exec python3 "$helper"
+    ;;
+esac
+
+preflight_or_die
+
+model=""
+max_continues="$DEFAULT_MAX_CONTINUES"
+detach=0
+dry_run=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --detach) detach=1; shift ;;
+    --dry-run) dry_run=1; shift ;;
+    --max-continues) [ "$#" -ge 2 ] || die "--max-continues requires a value"; max_continues="$2"; shift 2 ;;
+    --model) [ "$#" -ge 2 ] || die "--model requires a value"; model="$2"; shift 2 ;;
+    --) shift; break ;;
+    -*) die "unknown option: $1" ;;
+    *) break ;;
+  esac
+done
+
+payload_text=""
+case "$subcmd" in
+  run)
+    [ "$#" -ge 1 ] || die "run requires a task description"
+    resolve_skill_ref ilongrun || die "ilongrun skill source not found"
+    resolve_skill_ref ilongrun-resume >/dev/null || true
+    RESOLVED_RESUME_SKILL_REF="${RESOLVED_SKILL_REF:-/ilongrun-resume}"
+    resolve_skill_ref ilongrun || true
+    payload_text="$*"
+    ;;
+  prompt)
+    [ "$#" -ge 1 ] || die "prompt requires a task description"
+    resolve_skill_ref ilongrun-prompt || die "ilongrun-prompt skill source not found"
+    payload_text="$*"
+    ;;
+  resume)
+    payload_text="${1:-latest}"
+    resolve_skill_ref ilongrun-resume || die "ilongrun-resume skill source not found"
+    RESOLVED_RESUME_SKILL_REF="$RESOLVED_SKILL_REF"
+    ;;
+  status)
+    payload_text="${1:-latest}"
+    resolve_skill_ref ilongrun-status || die "ilongrun-status skill source not found"
+    ;;
+  *) die "unknown subcommand: $subcmd" ;;
+esac
+skill_ref="$RESOLVED_SKILL_REF"
+resume_skill_ref="$RESOLVED_RESUME_SKILL_REF"
+selected_model="$(selected_model_for_payload "$payload_text" "$model" || true)"
+[ -n "$selected_model" ] || selected_model="${model:-claude-opus-4.6}"
+
+prepared_run_id=""
+if [ "$subcmd" = "run" ]; then
+  PREPARE_RUN="$(helper_path prepare_ilongrun_run.py || true)"
+  [ -n "$PREPARE_RUN" ] || die "prepare_ilongrun_run helper missing"
+  if [ "$dry_run" -eq 0 ]; then
+    prepare_cmd=(python3 "$PREPARE_RUN" --workspace "$PWD" --task "$payload_text" --launcher-mode launcher-preallocated --session-model "$selected_model" --model-control-mode launcher-enforced --print-json)
+    [ -n "$model" ] && prepare_cmd+=(--explicit-model "$model")
+    prepared_json="$("${prepare_cmd[@]}")" || die "failed to prepare fresh ILongRun run"
+    prepared_run_id="$(printf '%s' "$prepared_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["runId"])')"
+  fi
+fi
+
+SUPERVISOR="$(helper_path launch_ilongrun_supervisor.py || true)"
+[ -n "$SUPERVISOR" ] || die "launch_ilongrun_supervisor helper missing"
+
+supervisor_cmd=(python3 "$SUPERVISOR" --workspace "$PWD" --copilot-bin "$COPILOT_REAL_BIN" --mode "$subcmd" --skill-ref "$skill_ref" --payload "$payload_text" --max-continues "$max_continues" --model-config "$MODEL_CONFIG_PATH" --availability-cache "$MODEL_AVAILABILITY_PATH")
+[ -n "$resume_skill_ref" ] && supervisor_cmd+=(--resume-skill-ref "$resume_skill_ref")
+for arg in "${PLUGIN_ARGS[@]:-}"; do [ -n "$arg" ] && supervisor_cmd+=(--plugin-arg "$arg"); done
+[ -n "$prepared_run_id" ] && supervisor_cmd+=(--target-run-id "$prepared_run_id")
+[ -z "$prepared_run_id" ] && [ "$subcmd" = "resume" ] && supervisor_cmd+=(--target-run-id "$payload_text")
+[ -n "$model" ] && supervisor_cmd+=(--explicit-model "$model")
+
+if [ "$dry_run" -eq 1 ]; then
+  actual_cmd=("$COPILOT_REAL_BIN")
+  for arg in "${PLUGIN_ARGS[@]:-}"; do [ -n "$arg" ] && actual_cmd+=(--plugin-dir "$arg"); done
+  if [ "$subcmd" = "run" ] || [ "$subcmd" = "resume" ]; then
+    actual_cmd+=(--autopilot --yolo --no-ask-user --max-autopilot-continues "$max_continues")
+  else
+    actual_cmd+=(--yolo --no-ask-user)
+  fi
+  actual_cmd+=(--model "$selected_model" -p "$skill_ref $payload_text")
+  shell_join "${actual_cmd[@]}"
+  exit 0
+fi
+
+if [ "$detach" -eq 1 ] && { [ "$subcmd" = "run" ] || [ "$subcmd" = "resume" ]; }; then
+  launcher_dir="$PWD/$LAUNCHER_DIR_NAME"
+  mkdir -p "$launcher_dir"
+  ts="$(date +%Y%m%d-%H%M%S)"
+  log_file="$launcher_dir/${subcmd}-${ts}.log"
+  meta_file="$launcher_dir/${subcmd}-${ts}.json"
+  launch_detached_via_screen "$subcmd" "$payload_text" "$log_file" "$meta_file" "$selected_model" "${supervisor_cmd[@]}"
+  exit 0
+fi
+
+exec "${supervisor_cmd[@]}"

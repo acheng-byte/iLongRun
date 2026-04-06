@@ -1,0 +1,31 @@
+{
+  "name": "ilongrun",
+  "description": "iLongRun turns GitHub Copilot CLI into a resumable planner-of-planners swarm kernel with scheduler.json, task-list projections, fleet wave dispatch, and GPT-5.4 coding audit gates.",
+  "version": "0.1.0",
+  "author": {
+    "name": "zscc.in",
+    "url": "https://github.com/zscc"
+  },
+  "license": "MIT",
+  "keywords": [
+    "github-copilot-cli",
+    "ilongrun",
+    "swarm-kernel",
+    "planner-of-planners",
+    "long-running",
+    "agent",
+    "skills",
+    "fleet",
+    "gpt-5.4",
+    "audit"
+  ],
+  "category": "Productivity",
+  "tags": [
+    "copilot-cli",
+    "autopilot",
+    "swarm"
+  ],
+  "agents": "agents/",
+  "skills": "skills/",
+  "hooks": "hooks.json"
+}
