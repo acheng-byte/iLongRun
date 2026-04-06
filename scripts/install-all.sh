@@ -9,7 +9,7 @@ TMP_INSTALL_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ilongrun-install-flow.XXXXXX")"
 KEEP_INSTALL_LOGS=0
 COLOR_ENABLED=0
 
-if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+if [ "${ILONGRUN_ENABLE_ANSI:-0}" = "1" ] && [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
   COLOR_ENABLED=1
 fi
 

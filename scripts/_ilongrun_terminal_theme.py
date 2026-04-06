@@ -31,6 +31,8 @@ PALETTE = {
 
 
 def supports_color(stream=None) -> bool:
+    if os.environ.get("ILONGRUN_ENABLE_ANSI") != "1":
+        return False
     if os.environ.get("NO_COLOR"):
         return False
     if os.environ.get("CLICOLOR_FORCE") == "1" or os.environ.get("FORCE_COLOR"):
