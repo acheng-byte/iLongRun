@@ -135,6 +135,15 @@ def main() -> int:
     print(f"  插件来源      {args.plugin_source}")
     print("")
 
+    print("🎛️ 想改默认模型，就改这里")
+    print("──────────────────────────────────")
+    print(f"  配置文件      {args.model_config}")
+    print("  通用命令      改 commandDefaults")
+    print("  内部 skill     改 skillDefaults")
+    print("  最终终审      改 codingAuditModel")
+    print("  修改完成后    建议执行：ilongrun-doctor --refresh-model-cache")
+    print("")
+
     print("🧭 新手下一步")
     print("──────────────────────────────────")
     print('  1. 通用任务：ilongrun "用自然语言描述你的任务"')

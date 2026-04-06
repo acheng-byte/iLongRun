@@ -14,6 +14,8 @@ run 协议统一化与模型配置化：修复 split-run 漂移、清除旧 `cop
 - **一键安装先彻底清理再重装**：`install.sh` / `scripts/install-all.sh` 现在会先执行完整清理，卸载旧 `ilongrun / longrun / copilot-mission-control` 插件定义，删除旧缓存、旧 launchers、旧 personal skills/agents，以及 `~/.copilot-ilongrun` / `~/.copilot-mission-control`，然后再安装新版插件与命令
 - **新增 `cleanup-copilot-longrun-state.sh`**：把彻底清理逻辑沉淀为可复用 helper，避免重复手工排查和手工删除
 - **一键安装中文看板**：安装流程现在会输出品牌化中文安装向导 / 安装看板，补齐新手引导、安装成功提示与社区欢迎语
+- **安装兼容 `curl | bash`**：修复通过标准输入执行时 `BASH_SOURCE[0]` 为空导致的 `unbound variable` 提示
+- **模型配置提醒补齐**：安装看板会显式告诉用户默认模型配置文件位置，以及 `commandDefaults / skillDefaults / codingAuditModel` 的修改入口
 
 ### 新增
 - **`model-policy.jsonc`**：默认模型改为注释化 JSONC 配置，支持 `commandDefaults` / `skillDefaults` / `roleModels` / `codingAuditModel` / `fallback`

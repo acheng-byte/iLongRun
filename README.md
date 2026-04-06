@@ -65,6 +65,7 @@ ilongrun-doctor --notify-test
 > 如果本机 `copilot plugin install` 可用，安装脚本会尝试注册新版插件；如果插件注册失败，也不会影响本地 skills + launchers 的使用。
 
 安装结束后，终端会直接展示一张 **中文安装看板**，把安装状态、新手下一步、环境摘要和常用命令一次讲清楚。
+看板里还会明确告诉你默认模型配置文件位置：`~/.copilot-ilongrun/config/model-policy.jsonc`，以及 `commandDefaults / skillDefaults / codingAuditModel` 分别该改哪里。
 
 ---
 

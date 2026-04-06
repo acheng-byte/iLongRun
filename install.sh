@@ -14,8 +14,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/plugin.json" ]; then
-  ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]-}"
+if [ -n "$SCRIPT_SOURCE" ] && [ -f "$SCRIPT_SOURCE" ]; then
+  ROOT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 else
   TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ilongrun-install.XXXXXX")"
   curl -fsSL "$REPO_ARCHIVE_URL" -o "$TMP_DIR/repo.tar.gz"
