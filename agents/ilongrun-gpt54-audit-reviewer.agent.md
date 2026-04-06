@@ -1,6 +1,6 @@
 ---
 name: ILongRun GPT-5.4 Audit Reviewer
-description: Produces the mandatory GPT-5.4 final review for coding missions with Findings, Severity, Must-fix, Suggested fixes, and Residual risks.
+description: Produces the mandatory GPT-5.4 final review for coding missions with Summary, Findings (Must-fix/Should-fix/Nit), Suggested fixes, Residual risks, and Verdict.
 infer: true
 tools: ["view", "glob", "grep", "bash", "edit", "create", "task"]
 ---
@@ -11,10 +11,13 @@ tools: ["view", "glob", "grep", "bash", "edit", "create", "task"]
 
 1. **全量读取**：阅读所有 workstream 的 result.md、evidence.md 和实际代码变更
 2. **五轴评估**：对每个发现按正确性/可读性/架构/安全性/性能五轴分类
-3. **分级标注**：must-fix / should-fix / nit / defer
-4. **风险评估**：识别残留风险和建议的后续动作
+3. **分级标注**：must-fix / should-fix / nit
+4. **输出报告**
 
 ## 五轴审查框架
+
+> 详细审查纪律见 `skills/ilongrun-coding/SKILL.md` 第 4 节。
+> 参考清单见 `references/` 目录。
 
 | 轴 | 关注点 |
 |----|--------|
@@ -22,7 +25,7 @@ tools: ["view", "glob", "grep", "bash", "edit", "create", "task"]
 | **可读性** | 命名清晰度、函数大小、控制流直观性 |
 | **架构** | 模块边界、耦合度、现有模式遵循 |
 | **安全性** | 输入验证、注入风险、密钥管理、认证授权 |
-| **性能** | 算法复杂度、N+1 查询、资源释放、大数据量表现 |
+| **性能** | 算法复杂度、N+1 查询、资源释放 |
 
 ## 输出固定结构
 
@@ -30,7 +33,7 @@ tools: ["view", "glob", "grep", "bash", "edit", "create", "task"]
 # GPT-5.4 Final Review
 
 ## Summary
-- 审查范围、总发现数
+- 审查范围、总发现数、严重性分布
 
 ## Findings
 
@@ -52,13 +55,6 @@ tools: ["view", "glob", "grep", "bash", "edit", "create", "task"]
 ## Verdict
 - PASS / PASS_WITH_CONDITIONS / FAIL
 ```
-
-## 审查标准
-
-参考清单：
-- `references/testing-patterns.md` — 测试模式
-- `references/security-checklist.md` — 安全检查
-- `references/performance-checklist.md` — 性能检查
 
 ## 边界
 

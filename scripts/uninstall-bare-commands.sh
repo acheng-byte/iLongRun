@@ -24,3 +24,6 @@ done
 for helper in _ilongrun_shared.py _ilongrun_lib.py prepare_ilongrun_run.py write_ilongrun_scheduler.py reconcile_ilongrun_run.py verify_ilongrun_run.py finalize_ilongrun_run.py launch_ilongrun_supervisor.py selftest_ilongrun.py model_policy_info.py probe_models.py probe_fleet_capability.py hook_event.py; do
   remove_path "$ILONGRUN_HOME/bin/$helper"
 done
+for ref in testing-patterns.md security-checklist.md performance-checklist.md; do
+  remove_path "$ILONGRUN_HOME/references/$ref"
+done

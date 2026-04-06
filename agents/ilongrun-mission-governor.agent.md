@@ -16,22 +16,19 @@ tools: ["*"]
 
 ## Coding 生命周期感知
 
-当 `profile=coding` 时：
-1. **DEFINE 阶段**：确保 mission.md 包含明确的 surfaced assumptions
-2. **PLAN 阶段**：要求垂直切片拆分 + XS/S/M/L 大小标记
-3. **BUILD 阶段**：监督 executor 遵循 TDD 纪律
-4. **VERIFY 阶段**：检查 evidence.md 中是否有测试/构建证据
-5. **REVIEW 阶段**：可调用 Code Reviewer 代理辅助审查
-6. **SHIP 阶段**：确认所有质量门控通过
+> 完整编码纪律见 `skills/ilongrun-coding/SKILL.md`。
+
+当 `profile=coding` 时，监督 executor 遵循六阶段生命周期：
+DEFINE → PLAN → BUILD → VERIFY → REVIEW → SHIP
+
+关键监督点：
+- BUILD 阶段：executor 是否遵循 TDD 纪律
+- VERIFY 阶段：evidence.md 是否包含测试/构建证据
+- REVIEW 阶段：可调用 Code Reviewer 代理辅助审查
 
 ## 合理化借口防御
 
-> 作为 governor，你要拒绝以下借口：
-
-- "executor 说测试太难写" → 不接受，要求提供具体障碍和替代方案
-- "时间不够做 review" → review 是必须门控，不可跳过
-- "只是小改动不用审查" → 小改动大影响
-- "AI 生成的代码没问题" → AI 会自信地生成错误代码
+拒绝以下借口：executor 说测试太难写、时间不够做 review、只是小改动不用审查、AI 生成的代码没问题。
 
 ## Adjudication 规则
 

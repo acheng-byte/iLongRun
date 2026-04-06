@@ -38,7 +38,8 @@ install_copied_file() {
   cp "$source" "$target"
 }
 
-mkdir -p "$TARGET_SKILLS_DIR" "$TARGET_AGENTS_DIR" "$HELPER_BIN_DIR" "$HELPER_CONFIG_DIR"
+HELPER_REFS_DIR="$ILONGRUN_HOME/references"
+mkdir -p "$TARGET_SKILLS_DIR" "$TARGET_AGENTS_DIR" "$HELPER_BIN_DIR" "$HELPER_CONFIG_DIR" "$HELPER_REFS_DIR"
 
 for skill_dir in "$ROOT_DIR"/skills/*; do
   [ -d "$skill_dir" ] || continue
@@ -53,6 +54,15 @@ for agent_file in "$ROOT_DIR"/agents/*.md; do
   install_copied_file "$agent_file" "$TARGET_AGENTS_DIR/$agent_name"
   printf 'Installed agent: %s\n' "$agent_name"
 done
+
+if [ -d "$ROOT_DIR/references" ]; then
+  for ref_file in "$ROOT_DIR"/references/*.md; do
+    [ -f "$ref_file" ] || continue
+    ref_name="$(basename "$ref_file")"
+    install_copied_file "$ref_file" "$HELPER_REFS_DIR/$ref_name"
+    printf 'Installed reference: %s\n' "$ref_name"
+  done
+fi
 
 helpers=(
   _ilongrun_shared.py
