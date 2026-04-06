@@ -419,6 +419,7 @@ def main() -> int:
     parser.add_argument("--model-config")
     parser.add_argument("--availability-cache")
     parser.add_argument("--target-run-id", default="")
+    parser.add_argument("--force-profile", choices=["coding", "research", "office"])
     parser.add_argument("--plugin-arg", action="append", default=[])
     args = parser.parse_args()
 
@@ -437,10 +438,17 @@ def main() -> int:
     current_payload = args.payload
     run_ref = args.target_run_id or ""
     if args.mode == "run" and run_ref:
+        force_profile_line = ""
+        if args.force_profile:
+            force_profile_line = (
+                f"Force mission profile: {args.force_profile}\n"
+                "Treat this as that exact mission profile even if the task wording is mixed.\n"
+            )
         current_payload = (
             "[ILongRun launcher context]\n"
             f"Assigned run-id: {run_ref}\n"
             "Use this exact run-id and do not mint a different run-id.\n"
+            f"{force_profile_line}"
             "If any execution wave backend is `fleet`, stop after strategy/phase/workstream/task-list decomposition and wait for external supervisor dispatch.\n"
             "Do not personally execute fleet-tagged workstreams inside the primary planning pass.\n"
             "[/ILongRun launcher context]\n\n"

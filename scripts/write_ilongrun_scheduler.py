@@ -37,6 +37,7 @@ def main() -> int:
     parser.add_argument("--patch-workstream-json")
     parser.add_argument("--init-from-prompt")
     parser.add_argument("--explicit-model")
+    parser.add_argument("--force-profile", choices=["coding", "research", "office"])
     parser.add_argument("--session-model")
     parser.add_argument("--model-control-mode")
     parser.add_argument("--model-config")
@@ -54,6 +55,7 @@ def main() -> int:
             target.run_id,
             args.init_from_prompt,
             explicit_model=args.explicit_model,
+            forced_profile=args.force_profile,
             session_model=args.session_model or os.environ.get("LONGRUN_SELECTED_MODEL"),
             model_control_mode=args.model_control_mode or os.environ.get("LONGRUN_MODEL_CONTROL_MODE"),
             config=config,

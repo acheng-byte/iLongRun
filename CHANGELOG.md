@@ -16,10 +16,13 @@ macOS 通知链路回归：把 LongRun 中成熟的系统提醒能力按 iLongRu
 - **finalize**：complete precheck 失败时发送 `attention`；真正 `complete` / `blocked` 时发送结果通知
 - **安装脚本**：Darwin 环境优先准备 `terminal-notifier`，失败后保底回退基础 macOS 通知
 - **selftest**：新增通知 helper dry-run 测试，覆盖 launched / complete 与打开目标解析
+- **热修：`ilongrun-coding` 命令入口补齐**：一键安装现在会安装 `ilongrun-coding` launcher，且该入口会显式强制 `profile=coding`
+- **doctor**：新增 launcher 完整性检查，缺失 `ilongrun-coding` 时会明确提示重新执行安装脚本
 
 ### 文档
 - 新增 `docs/发版说明-v0.3.0.md`
 - README、快速开始与 doctor 说明补充通知自检命令参考
+- README / 快速开始 / 发版说明同步补写 `ilongrun-coding` 的用户入口语义与重装说明
 
 ## v0.2.1
 

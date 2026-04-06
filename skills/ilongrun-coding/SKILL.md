@@ -8,6 +8,7 @@ disable-model-invocation: false
 
 仅当 iLongRun mission 的 `profile=coding` 时自动加载。
 本技能是编码纪律的**唯一权威来源**，agents 只做薄层执行引用。
+终端用户入口是 `ilongrun-coding` shell 命令；不要把这个内部 discipline skill 当成主要的顶层调用入口。
 
 ---
 

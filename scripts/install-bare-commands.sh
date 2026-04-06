@@ -172,6 +172,10 @@ You can now use these Copilot bare commands:
   /ilongrun-resume
   /ilongrun-status
 
+Installed internal discipline skill:
+  /ilongrun-coding
+  （供 iLongRun 在 coding mission 中自动加载；终端用户入口是后续安装的 shell 命令 `ilongrun-coding`）
+
 ILongRun helper bundle:
   $HELPER_BIN_DIR
 EOF2

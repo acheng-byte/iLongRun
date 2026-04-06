@@ -50,6 +50,19 @@ def main() -> int:
         assert (run_dir / "plan.md").exists()
         assert (run_dir / "scheduler.json").exists()
         assert list(run_dir.glob("task-list-*.md"))
+        coding_workspace = temp_root / "coding-workspace"
+        coding_workspace.mkdir(parents=True, exist_ok=True)
+        run(
+            str(ROOT / "prepare_ilongrun_run.py"),
+            "--workspace", str(coding_workspace),
+            "--task", "帮我整理一个前端项目的开发计划，但这次强制按 coding mission 启动",
+            "--force-profile", "coding",
+        )
+        coding_run_id = (coding_workspace / ".copilot-ilongrun" / "state" / "latest-run-id").read_text(encoding="utf-8").strip()
+        coding_sched = read_json(coding_workspace / ".copilot-ilongrun" / "runs" / coding_run_id / "scheduler.json")
+        assert coding_sched.get("profile") == "coding"
+        assert (coding_sched.get("mission") or {}).get("profile") == "coding"
+        assert (coding_sched.get("reviews") or {}).get("required") is True
         launched = run(
             str(ROOT / "notify_macos.py"),
             "--workspace", str(workspace),

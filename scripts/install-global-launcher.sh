@@ -17,7 +17,7 @@ backup_if_needed() {
   fi
 }
 
-for name in ilongrun ilongrun-prompt ilongrun-resume ilongrun-status ilongrun-doctor copilot-ilongrun; do
+for name in ilongrun ilongrun-coding ilongrun-prompt ilongrun-resume ilongrun-status ilongrun-doctor copilot-ilongrun; do
   backup_if_needed "$HOME/.local/bin/$name"
   cp "$ROOT_DIR/scripts/$name" "$HOME/.local/bin/$name"
   chmod +x "$HOME/.local/bin/$name"
@@ -26,6 +26,7 @@ done
 printf 'Installed launchers into %s\n' "$HOME/.local/bin"
 printf 'Commands:\n'
 printf '  ilongrun\n'
+printf '  ilongrun-coding\n'
 printf '  ilongrun-prompt\n'
 printf '  ilongrun-resume\n'
 printf '  ilongrun-status\n'

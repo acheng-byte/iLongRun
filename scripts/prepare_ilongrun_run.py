@@ -34,6 +34,7 @@ def main() -> int:
     parser.add_argument("--run-id")
     parser.add_argument("--allow-existing", action="store_true")
     parser.add_argument("--explicit-model")
+    parser.add_argument("--force-profile", choices=["coding", "research", "office"])
     parser.add_argument("--session-model")
     parser.add_argument("--model-control-mode")
     parser.add_argument("--model-config")
@@ -61,6 +62,7 @@ def main() -> int:
             target.run_id,
             args.task,
             explicit_model=args.explicit_model,
+            forced_profile=args.force_profile,
             session_model=args.session_model,
             model_control_mode=args.model_control_mode,
             config=config,

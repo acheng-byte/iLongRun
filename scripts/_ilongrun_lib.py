@@ -670,13 +670,16 @@ def init_scheduler_payload(
     prompt: str,
     explicit_model: str | None = None,
     *,
+    forced_profile: str | None = None,
     session_model: str | None = None,
     model_control_mode: str | None = None,
     config: dict[str, Any] | None = None,
     availability: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     cfg = config or load_model_config()
-    profile = profile_from_prompt(prompt)
+    if forced_profile and forced_profile not in {"coding", "research", "office"}:
+        raise ValueError(f"unsupported forced profile: {forced_profile}")
+    profile = forced_profile or profile_from_prompt(prompt)
     language = infer_language(prompt)
     mode = infer_mode(prompt, profile)
     termination = infer_termination_mode(prompt)

@@ -40,6 +40,7 @@ usage() {
   cat <<'EOF'
 Usage:
   ilongrun "<task>"
+  ilongrun-coding "<coding-task>"
   ilongrun-prompt "<task>"
   ilongrun-resume [run-id|latest]
   ilongrun-status [run-id|latest]
@@ -47,6 +48,7 @@ Usage:
 
 Advanced:
   copilot-ilongrun run [--detach] [--max-continues N] [--model MODEL] [--dry-run] <task>
+  copilot-ilongrun coding [--detach] [--max-continues N] [--model MODEL] [--dry-run] <task>
   copilot-ilongrun prompt [--model MODEL] [--dry-run] <task>
   copilot-ilongrun resume [--detach] [--max-continues N] [--model MODEL] [run-id|latest]
   copilot-ilongrun status [run-id|latest]
@@ -293,7 +295,26 @@ doctor() {
   local helper_probe="$(helper_path probe_models.py || true)"
   local helper_fleet_probe="$(helper_path probe_fleet_capability.py || true)"
   local helper_notify="$(helper_path notify_macos.py || true)"
+  local expected_launchers=(ilongrun ilongrun-coding ilongrun-prompt ilongrun-resume ilongrun-status ilongrun-doctor copilot-ilongrun)
   ensure_model_paths || true
+  for launcher in "${expected_launchers[@]}"; do
+    local launcher_path
+    launcher_path="$(find_bin_from_common_locations "$launcher" || true)"
+    if [ -n "$launcher_path" ]; then
+      if [ "$launcher" = "ilongrun-coding" ]; then
+        printf '[OK] coding launcher: %s\n' "$launcher_path"
+      else
+        printf '[OK] launcher %s: %s\n' "$launcher" "$launcher_path"
+      fi
+      continue
+    fi
+    if [ "$launcher" = "ilongrun-coding" ] && has_personal_skill ilongrun-coding; then
+      printf '[FAIL] coding launcher missing: ilongrun-coding（skill 已安装，但 shell 命令未安装；请重新执行 install.sh）\n'
+    else
+      printf '[FAIL] launcher missing: %s\n' "$launcher"
+    fi
+    issues=$((issues+1))
+  done
   if [ -n "$copilot_bin" ]; then printf '[OK] copilot: %s\n' "$copilot_bin"; else printf '[FAIL] copilot CLI not found\n'; issues=$((issues+1)); fi
   if [ -n "$login" ]; then printf '[OK] login: %s\n' "$login"; else printf '[FAIL] copilot login missing\n'; issues=$((issues+1)); fi
   if [ -f "$MODEL_CONFIG_PATH" ]; then printf '[OK] model policy: %s\n' "$MODEL_CONFIG_PATH"; else printf '[FAIL] model policy missing\n'; issues=$((issues+1)); fi
@@ -405,9 +426,19 @@ while [ "$#" -gt 0 ]; do
 done
 
 payload_text=""
+force_profile=""
 case "$subcmd" in
   run)
     [ "$#" -ge 1 ] || die "run requires a task description"
+    resolve_skill_ref ilongrun || die "ilongrun skill source not found"
+    resolve_skill_ref ilongrun-resume >/dev/null || true
+    RESOLVED_RESUME_SKILL_REF="${RESOLVED_SKILL_REF:-/ilongrun-resume}"
+    resolve_skill_ref ilongrun || true
+    payload_text="$*"
+    ;;
+  coding)
+    [ "$#" -ge 1 ] || die "coding requires a task description"
+    force_profile="coding"
     resolve_skill_ref ilongrun || die "ilongrun skill source not found"
     resolve_skill_ref ilongrun-resume >/dev/null || true
     RESOLVED_RESUME_SKILL_REF="${RESOLVED_SKILL_REF:-/ilongrun-resume}"
@@ -436,12 +467,15 @@ selected_model="$(selected_model_for_payload "$payload_text" "$model" || true)"
 [ -n "$selected_model" ] || selected_model="${model:-claude-opus-4.6}"
 
 prepared_run_id=""
-if [ "$subcmd" = "run" ]; then
+supervisor_mode="$subcmd"
+[ "$subcmd" = "coding" ] && supervisor_mode="run"
+if [ "$subcmd" = "run" ] || [ "$subcmd" = "coding" ]; then
   PREPARE_RUN="$(helper_path prepare_ilongrun_run.py || true)"
   [ -n "$PREPARE_RUN" ] || die "prepare_ilongrun_run helper missing"
   if [ "$dry_run" -eq 0 ]; then
     prepare_cmd=(python3 "$PREPARE_RUN" --workspace "$PWD" --task "$payload_text" --launcher-mode launcher-preallocated --session-model "$selected_model" --model-control-mode launcher-enforced --print-json)
     [ -n "$model" ] && prepare_cmd+=(--explicit-model "$model")
+    [ -n "$force_profile" ] && prepare_cmd+=(--force-profile "$force_profile")
     prepared_json="$("${prepare_cmd[@]}")" || die "failed to prepare fresh ILongRun run"
     prepared_run_id="$(printf '%s' "$prepared_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["runId"])')"
   fi
@@ -450,17 +484,18 @@ fi
 SUPERVISOR="$(helper_path launch_ilongrun_supervisor.py || true)"
 [ -n "$SUPERVISOR" ] || die "launch_ilongrun_supervisor helper missing"
 
-supervisor_cmd=(python3 "$SUPERVISOR" --workspace "$PWD" --copilot-bin "$COPILOT_REAL_BIN" --mode "$subcmd" --skill-ref "$skill_ref" --payload "$payload_text" --max-continues "$max_continues" --model-config "$MODEL_CONFIG_PATH" --availability-cache "$MODEL_AVAILABILITY_PATH")
+supervisor_cmd=(python3 "$SUPERVISOR" --workspace "$PWD" --copilot-bin "$COPILOT_REAL_BIN" --mode "$supervisor_mode" --skill-ref "$skill_ref" --payload "$payload_text" --max-continues "$max_continues" --model-config "$MODEL_CONFIG_PATH" --availability-cache "$MODEL_AVAILABILITY_PATH")
 [ -n "$resume_skill_ref" ] && supervisor_cmd+=(--resume-skill-ref "$resume_skill_ref")
 for arg in "${PLUGIN_ARGS[@]:-}"; do [ -n "$arg" ] && supervisor_cmd+=(--plugin-arg "$arg"); done
 [ -n "$prepared_run_id" ] && supervisor_cmd+=(--target-run-id "$prepared_run_id")
 [ -z "$prepared_run_id" ] && [ "$subcmd" = "resume" ] && supervisor_cmd+=(--target-run-id "$payload_text")
 [ -n "$model" ] && supervisor_cmd+=(--explicit-model "$model")
+[ -n "$force_profile" ] && supervisor_cmd+=(--force-profile "$force_profile")
 
 if [ "$dry_run" -eq 1 ]; then
   actual_cmd=("$COPILOT_REAL_BIN")
   for arg in "${PLUGIN_ARGS[@]:-}"; do [ -n "$arg" ] && actual_cmd+=(--plugin-dir "$arg"); done
-  if [ "$subcmd" = "run" ] || [ "$subcmd" = "resume" ]; then
+  if [ "$subcmd" = "run" ] || [ "$subcmd" = "coding" ] || [ "$subcmd" = "resume" ]; then
     actual_cmd+=(--autopilot --yolo --no-ask-user --max-autopilot-continues "$max_continues")
   else
     actual_cmd+=(--yolo --no-ask-user)
@@ -470,7 +505,7 @@ if [ "$dry_run" -eq 1 ]; then
   exit 0
 fi
 
-if [ "$detach" -eq 1 ] && { [ "$subcmd" = "run" ] || [ "$subcmd" = "resume" ]; }; then
+if [ "$detach" -eq 1 ] && { [ "$subcmd" = "run" ] || [ "$subcmd" = "coding" ] || [ "$subcmd" = "resume" ]; }; then
   launcher_dir="$PWD/$LAUNCHER_DIR_NAME"
   mkdir -p "$launcher_dir"
   ts="$(date +%Y%m%d-%H%M%S)"

@@ -52,10 +52,13 @@ curl -fsSL https://raw.githubusercontent.com/izscc/iLongRun/main/install.sh | ba
 安装完成后建议先检查：
 
 ```bash
+command -v ilongrun
+command -v ilongrun-coding
 ilongrun-doctor --refresh-model-cache
 ilongrun-doctor --notify-test
 ```
 
+> 如果你是首批安装 v0.3.0 的用户，重新执行一次一键安装即可补齐 `ilongrun-coding` 入口。
 > 第二条用于 **macOS 通知链路自检**。如果没有看到提醒横幅，请检查系统通知权限、专注模式和通知摘要。
 > 如果本机 `copilot plugin install` 可用，安装脚本会尝试顺手注册插件；如果插件注册失败，也不会影响本地 skills + launchers 的使用。
 
@@ -75,7 +78,13 @@ ilongrun "修复登录流程并补充测试，最后做 GPT-5.4 终审"
 ilongrun-prompt "调研 3 个 AI Agent 编排方案，并输出中文对比结论"
 ```
 
-### 3）查看状态
+### 3）显式启动 coding 长跑
+
+```bash
+ilongrun-coding "设计并实现一个 TypeScript 服务端模块，补测试并最终做 GPT-5.4 终审"
+```
+
+### 4）查看状态
 
 ```bash
 ilongrun-status latest
@@ -83,7 +92,7 @@ ilongrun-status latest
 
 > 默认输出中文状态看板，必要时仅在中文后补充原始机器值。
 
-### 4）继续上一次长跑
+### 5）继续上一次长跑
 
 ```bash
 ilongrun-resume latest
@@ -95,6 +104,7 @@ ilongrun-resume latest
 
 ```bash
 ilongrun
+ilongrun-coding
 ilongrun-prompt
 ilongrun-resume
 ilongrun-status
@@ -104,9 +114,10 @@ copilot-ilongrun
 
 其中：
 
-- `ilongrun`：推荐主入口
+- `ilongrun`：推荐通用入口，会按任务内容自动推断 profile
+- `ilongrun-coding`：显式 coding 入口，直接强制 `profile=coding`
 - `copilot-ilongrun`：兼容 / 高级入口
-- `ilongrun-doctor`：环境、自检、模型、`/fleet` 能力探测、macOS 通知自检
+- `ilongrun-doctor`：环境、自检、launcher 完整性、模型、`/fleet` 能力探测、macOS 通知自检
 
 ---
 
@@ -197,7 +208,12 @@ iLongRun 不会盲目使用 `/fleet`。
 
 ## 编码纪律体系（v0.2.0 新增）
 
-当任务为 `profile=coding` 时，iLongRun 会自动加载编码纪律技能，指导 executor 按照科学的编码流程执行：
+当任务为 `profile=coding` 时，iLongRun 会自动加载编码纪律技能，指导 executor 按照科学的编码流程执行。
+
+- `ilongrun-coding`：给终端用户直接用的 shell 命令入口
+- `skills/ilongrun-coding/SKILL.md`：内部自动加载的 discipline skill，不是主要用户入口
+
+也就是说：**用户从命令行敲 `ilongrun-coding`，系统内部再自动加载 `ilongrun-coding` skill 纪律。**
 
 ### 六阶段编码生命周期
 
@@ -248,10 +264,26 @@ flowchart TD
 ### Q2：只装插件就够了吗？
 不一定。为了保证全局命令、helper bundle 和本地状态目录可用，推荐直接执行一键安装命令。
 
-### Q3：`/fleet` 探测失败是不是不能用？
+### Q3：为什么我确认装了 v0.3.0，但 `ilongrun-coding` 还是 command not found？
+这是 v0.3.0 首发时遗漏了 launcher 安装项导致的。重新执行一遍：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/izscc/iLongRun/main/install.sh | bash
+```
+
+然后再执行：
+
+```bash
+command -v ilongrun-coding
+ilongrun-doctor
+```
+
+如果仍然没有，请先检查 `PATH` 是否包含 `~/.local/bin`。
+
+### Q4：`/fleet` 探测失败是不是不能用？
 不是。只是对应 wave 不会走 `/fleet`，会自动降级为 `internal`，核心长跑仍可继续。
 
-### Q4：为什么会同时看到 `plan.md` 和多个 `task-list-N.md`？
+### Q5：为什么会同时看到 `plan.md` 和多个 `task-list-N.md`？
 因为 `plan.md` 负责顶层编排，`task-list-N.md` 负责具体执行清单，这是 iLongRun 的设计目标之一。
 
 ---
