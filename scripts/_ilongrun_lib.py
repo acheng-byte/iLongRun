@@ -278,7 +278,38 @@ def extract_numbered_items(prompt: str) -> list[str]:
         m = re.match(r"\s*[-*]\s+(.+?)\s*$", line)
         if m:
             bullet_items.append(m.group(1).strip())
-    return bullet_items[:4]
+    if bullet_items:
+        return bullet_items[:4]
+
+    colon_candidates: list[str] = []
+    colon_match = re.search(r"[：:]\s*([^。\n]+)", prompt)
+    if colon_match:
+        colon_candidates.append(colon_match.group(1).strip())
+    colon_candidates.append(prompt_stem(prompt))
+
+    stop_prefixes = ("并", "且", "然后", "最后", "再", "并且", "并分别", "分别", "统一", "汇总", "整合")
+    for candidate in colon_candidates:
+        if not candidate:
+            continue
+        parts = re.split(r"[、,，;；/]+", candidate)
+        cleaned_parts: list[str] = []
+        for part in parts:
+            cleaned = re.sub(r"\s+", " ", part).strip(" ;，。:：")
+            if not cleaned:
+                continue
+            if cleaned.startswith(stop_prefixes):
+                break
+            cleaned = re.sub(r"^(?:专题|任务|模块|方向|工作流|workstream)\s*", "", cleaned, flags=re.I)
+            if cleaned:
+                cleaned_parts.append(cleaned)
+        unique_parts: list[str] = []
+        for part in cleaned_parts:
+            if part not in unique_parts:
+                unique_parts.append(part)
+        if 2 <= len(unique_parts) <= 4:
+            return unique_parts[:4]
+
+    return []
 
 
 def infer_requested_deliverables(prompt: str) -> list[str]:
