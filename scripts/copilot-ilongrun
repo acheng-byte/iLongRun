@@ -365,91 +365,153 @@ doctor() {
   local helper_fleet_probe="$(helper_path probe_fleet_capability.py || true)"
   local helper_notify="$(helper_path notify_macos.py || true)"
   local helper_cleanup="$(helper_path cleanup_legacy_workspace.py || true)"
+  local helper_render_board="$(helper_path render_ilongrun_doctor_board.py || true)"
   local expected_launchers=(ilongrun ilongrun-coding ilongrun-prompt ilongrun-resume ilongrun-status ilongrun-doctor copilot-ilongrun)
+  local tmp_dir checks_file model_probe_json fleet_probe_json selftest_err selftest_out selftest_state_log fleet_cache_path
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ilongrun-doctor.XXXXXX")"
+  checks_file="$tmp_dir/checks.tsv"
+  model_probe_json="$tmp_dir/model-probe.json"
+  fleet_probe_json="$tmp_dir/fleet-probe.json"
+  selftest_err="$tmp_dir/selftest.err"
+  selftest_out="$tmp_dir/selftest.out"
+  fleet_cache_path="$ILONGRUN_HOME/config/capabilities.json"
+  mkdir -p "$ILONGRUN_HOME/state" "$ILONGRUN_HOME/config"
+  selftest_state_log="$ILONGRUN_HOME/state/doctor-last-selftest.err"
+
+  doctor_row() {
+    local key="$1" status="$2" value="$3"
+    value="${value//$'\t'/ }"
+    value="${value//$'\n'/ }"
+    printf '%s\t%s\t%s\n' "$key" "$status" "$value" >> "$checks_file"
+  }
+
+  write_model_probe_stub() {
+    python3 - "$model_probe_json" "$1" "$2" "$3" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+payload = {
+    "ok": False,
+    "identity": sys.argv[2],
+    "cache": sys.argv[3],
+    "reason": sys.argv[4],
+    "models": {},
+}
+path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
+  }
+
+  write_fleet_probe_stub() {
+    python3 - "$fleet_probe_json" "$1" "$2" "$3" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+payload = {
+    "ok": False,
+    "identity": sys.argv[2],
+    "cache": sys.argv[3],
+    "reason": sys.argv[4],
+    "status": "unknown",
+}
+path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
+  }
+
   ensure_model_paths || true
   for launcher in "${expected_launchers[@]}"; do
     local launcher_path
     launcher_path="$(find_bin_from_common_locations "$launcher" || true)"
     if [ -n "$launcher_path" ]; then
-      if [ "$launcher" = "ilongrun-coding" ]; then
-        printf '[OK] coding launcher: %s\n' "$launcher_path"
-      else
-        printf '[OK] launcher %s: %s\n' "$launcher" "$launcher_path"
-      fi
+      doctor_row "launcher.$launcher" ok "$launcher_path"
       continue
     fi
     if [ "$launcher" = "ilongrun-coding" ] && has_personal_skill ilongrun-coding; then
-      printf '[FAIL] coding launcher missing: ilongrun-coding（skill 已安装，但 shell 命令未安装；请重新执行 install.sh）\n'
+      doctor_row "launcher.$launcher" fail "skill 已安装，但 shell 命令未安装；请重新执行 install.sh"
     else
-      printf '[FAIL] launcher missing: %s\n' "$launcher"
+      doctor_row "launcher.$launcher" fail "未检测到；建议重新执行安装脚本"
     fi
     issues=$((issues+1))
   done
-  if [ -n "$copilot_bin" ]; then printf '[OK] copilot: %s\n' "$copilot_bin"; else printf '[FAIL] copilot CLI not found\n'; issues=$((issues+1)); fi
-  if [ -n "$login" ]; then printf '[OK] login: %s\n' "$login"; else printf '[FAIL] copilot login missing\n'; issues=$((issues+1)); fi
-  if [ -f "$MODEL_CONFIG_PATH" ]; then printf '[OK] model policy: %s\n' "$MODEL_CONFIG_PATH"; else printf '[FAIL] model policy missing\n'; issues=$((issues+1)); fi
+  if [ -n "$copilot_bin" ]; then doctor_row copilot ok "$copilot_bin"; else doctor_row copilot fail "未检测到 copilot CLI"; issues=$((issues+1)); fi
+  if [ -n "$login" ]; then doctor_row login ok "$login"; else doctor_row login fail "未登录 GitHub Copilot"; issues=$((issues+1)); fi
+  if [ -f "$MODEL_CONFIG_PATH" ]; then doctor_row model_policy ok "$MODEL_CONFIG_PATH"; else doctor_row model_policy fail "模型配置文件缺失"; issues=$((issues+1)); fi
   if legacy_plugin_enabled; then
-    if auto_uninstall_legacy_plugin; then
-      printf '[OK] legacy plugin removed: %s\n' "$LEGACY_PLUGIN_NAME"
+    if auto_uninstall_legacy_plugin >/dev/null 2>&1; then
+      doctor_row legacy_plugin ok "已自动卸载：${LEGACY_PLUGIN_NAME}"
     else
-      printf '[FAIL] legacy plugin still enabled: %s\n' "$LEGACY_PLUGIN_NAME"
+      doctor_row legacy_plugin fail "仍处于启用状态：${LEGACY_PLUGIN_NAME}"
       issues=$((issues+1))
     fi
   else
-    printf '[OK] legacy plugin not enabled: %s\n' "$LEGACY_PLUGIN_NAME"
+    doctor_row legacy_plugin ok "未启用（${LEGACY_PLUGIN_NAME}）"
   fi
   if [ -n "$helper_cleanup" ]; then
     cleanup_result="$(python3 "$helper_cleanup" --workspace "$PWD" --print-json 2>/dev/null || true)"
     cleanup_action="$(printf '%s' "$cleanup_result" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data.get("action","noop"))' 2>/dev/null || printf 'noop')"
     cleanup_archive="$(printf '%s' "$cleanup_result" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data.get("archivePath") or "")' 2>/dev/null || true)"
     if [ "$cleanup_action" = "noop" ]; then
-      printf '[OK] workspace legacy state: none\n'
+      doctor_row workspace_legacy ok "未发现旧工作区残留"
     else
-      printf '[OK] workspace legacy state cleaned: %s\n' "$cleanup_action"
-      [ -n "$cleanup_archive" ] && printf '  archived at: %s\n' "$cleanup_archive"
+      doctor_row workspace_legacy ok "已清理：$cleanup_action"
+      [ -n "$cleanup_archive" ] && doctor_row workspace_archive info "$cleanup_archive"
     fi
   fi
-  if [ -n "$screen_bin" ]; then printf '[OK] screen: %s\n' "$screen_bin"; else printf '[WARN] screen missing; --detach unavailable\n'; fi
+  if [ -n "$screen_bin" ]; then doctor_row screen ok "$screen_bin"; else doctor_row screen warn "未检测到；将无法使用 --detach"; fi
   if [ "$(uname -s)" = "Darwin" ]; then
     if [ -n "$mac_notifier" ]; then
-      printf '[OK] terminal-notifier: %s\n' "$mac_notifier"
+      doctor_row terminal_notifier ok "$mac_notifier"
     elif [ -n "$helper_notify" ]; then
-      printf '[WARN] terminal-notifier missing; will fall back to osascript on macOS\n'
+      doctor_row terminal_notifier warn "未检测到 terminal-notifier；会自动回退到 osascript"
     else
-      printf '[WARN] macOS notify helper missing\n'
-    fi
-  fi
-  if [ -n "$helper_probe" ] && [ -n "$copilot_bin" ] && [ -n "$login" ]; then
-    local cmd=(python3 "$helper_probe" --copilot-bin "$copilot_bin" --config "$MODEL_CONFIG_PATH" --cache "$MODEL_AVAILABILITY_PATH" --scope defaults)
-    [ "$refresh_cache" = "1" ] && cmd+=(--refresh)
-    "${cmd[@]}" | sed 's/^/  /'
-  fi
-  if [ -n "$helper_selftest" ]; then
-    if python3 "$helper_selftest" >/tmp/ilongrun-selftest.out 2>/tmp/ilongrun-selftest.err; then
-      printf '[OK] ilongrun selftest passed\n'
-    else
-      printf '[FAIL] ilongrun selftest failed\n'
-      sed 's/^/  /' /tmp/ilongrun-selftest.err >&2 || true
-      issues=$((issues+1))
-    fi
-  fi
-  if [ -n "$helper_fleet_probe" ] && [ -n "$copilot_bin" ] && [ -n "$login" ]; then
-    local probe_cmd=(python3 "$helper_fleet_probe" --copilot-bin "$copilot_bin" --model-config "$MODEL_CONFIG_PATH" --availability-cache "$MODEL_AVAILABILITY_PATH")
-    [ "$refresh_cache" = "1" ] && probe_cmd+=(--refresh)
-    if fleet_line="$("${probe_cmd[@]}" 2>/dev/null)"; then
-      printf '[OK] %s\n' "$fleet_line"
-    else
-      printf '[WARN] /fleet capability probe could not confirm support\n'
+      doctor_row terminal_notifier warn "提醒 helper 缺失"
     fi
   else
-    printf '[WARN] /fleet capability probe unavailable\n'
+    doctor_row terminal_notifier info "当前不是 macOS，无需 terminal-notifier"
+  fi
+  if [ -n "$helper_probe" ] && [ -n "$copilot_bin" ] && [ -n "$login" ]; then
+    local cmd=(python3 "$helper_probe" --copilot-bin "$copilot_bin" --config "$MODEL_CONFIG_PATH" --cache "$MODEL_AVAILABILITY_PATH" --scope defaults --json)
+    [ "$refresh_cache" = "1" ] && cmd+=(--refresh)
+    if ! "${cmd[@]}" >"$model_probe_json" 2>"$tmp_dir/model-probe.err"; then
+      write_model_probe_stub "${login:-}" "$MODEL_AVAILABILITY_PATH" "probe-command-failed"
+    fi
+  elif [ -z "$login" ]; then
+    write_model_probe_stub "" "$MODEL_AVAILABILITY_PATH" "skipped-no-login"
+  elif [ -z "$copilot_bin" ]; then
+    write_model_probe_stub "${login:-}" "$MODEL_AVAILABILITY_PATH" "skipped-no-copilot"
+  else
+    write_model_probe_stub "${login:-}" "$MODEL_AVAILABILITY_PATH" "probe-helper-missing"
+  fi
+  if [ -n "$helper_selftest" ]; then
+    if python3 "$helper_selftest" >"$selftest_out" 2>"$selftest_err"; then
+      doctor_row selftest ok "已通过"
+      rm -f "$selftest_state_log"
+    else
+      cp "$selftest_err" "$selftest_state_log"
+      doctor_row selftest fail "未通过"
+      doctor_row selftest_log info "$selftest_state_log"
+      issues=$((issues+1))
+    fi
+  else
+    doctor_row selftest warn "selftest helper 缺失，未执行"
+  fi
+  if [ -n "$helper_fleet_probe" ] && [ -n "$copilot_bin" ] && [ -n "$login" ]; then
+    local probe_cmd=(python3 "$helper_fleet_probe" --copilot-bin "$copilot_bin" --model-config "$MODEL_CONFIG_PATH" --availability-cache "$MODEL_AVAILABILITY_PATH" --cache "$fleet_cache_path" --json)
+    [ "$refresh_cache" = "1" ] && probe_cmd+=(--refresh)
+    if ! "${probe_cmd[@]}" >"$fleet_probe_json" 2>"$tmp_dir/fleet-probe.err"; then
+      write_fleet_probe_stub "${login:-}" "$fleet_cache_path" "probe-command-failed"
+    fi
+  elif [ -z "$login" ]; then
+    write_fleet_probe_stub "" "$fleet_cache_path" "skipped-no-login"
+  elif [ -z "$copilot_bin" ]; then
+    write_fleet_probe_stub "${login:-}" "$fleet_cache_path" "skipped-no-copilot"
+  else
+    write_fleet_probe_stub "${login:-}" "$fleet_cache_path" "probe-helper-missing"
   fi
   if [ "$notify_test" = "1" ]; then
-    printf '\n'
     if [ "$(uname -s)" != "Darwin" ]; then
-      printf '[WARN] notify-test skipped: current system is not macOS\n'
+      doctor_row notify_test warn "当前不是 macOS，已跳过提醒测试"
     elif [ -z "$helper_notify" ]; then
-      printf '[FAIL] notify-test skipped: notify_macos.py helper missing\n'
+      doctor_row notify_test fail "提醒 helper 缺失，无法测试系统通知"
       issues=$((issues+1))
     else
       if python3 "$helper_notify" \
@@ -462,15 +524,25 @@ doctor() {
         --sound \
         --dedupe-seconds 0 \
         --group "ilongrun.doctor-test.$(date +%s)" >/dev/null 2>&1; then
-        printf '[OK] notify-test sent\n'
-        printf '  若 3 秒内没有看到横幅，请检查：系统设置 > 通知 > terminal-notifier（或 Script Editor）\n'
-        printf '  另外请确认未开启专注模式，且没有被归入通知摘要。\n'
+        doctor_row notify_test ok "已发送，请留意系统通知横幅"
       else
-        printf '[FAIL] notify-test failed\n'
+        doctor_row notify_test fail "发送失败，请检查系统通知权限"
         issues=$((issues+1))
       fi
     fi
   fi
+  if [ -n "$helper_render_board" ]; then
+    python3 "$helper_render_board" \
+      --checks-file "$checks_file" \
+      --model-probe-json "$model_probe_json" \
+      --fleet-probe-json "$fleet_probe_json" \
+      --selftest-log "$selftest_state_log" \
+      --refresh-cache "$refresh_cache" \
+      --notify-test "$notify_test"
+  else
+    cat "$checks_file"
+  fi
+  rm -rf "$tmp_dir"
   [ "$issues" -eq 0 ]
 }
 

@@ -133,13 +133,26 @@ def detail_line(label: str, value: str, label_width: int = 12) -> str:
     return f"  {label_text} {value}"
 
 
-def ad_box(text: str, width: int = 72) -> str:
-    lines = textwrap.wrap(text, width=max(20, width - 4), break_long_words=False, break_on_hyphens=False)
-    border = paint("=" * width, PALETTE["gold"], BOLD)
+def ad_box(text: str, width: int = 72, align: str = "center") -> str:
+    if "\n" in text:
+        lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    else:
+        lines = textwrap.wrap(text, width=max(20, width - 4), break_long_words=False, break_on_hyphens=False)
+    content_width = max(max((display_width(line) for line in lines), default=0) + 2, width - 2)
+    total_width = content_width + 2
+    border = paint("=" * total_width, PALETTE["gold"], BOLD)
     rows = [border]
     for raw in lines:
-        inner = f"= {raw}"
-        padding = width - 1 - display_width(inner)
-        rows.append(paint(inner + (" " * max(0, padding)) + "=", PALETTE["gold"], BOLD))
+        line_width = display_width(raw)
+        if align == "center":
+            left = max(0, (content_width - line_width) // 2)
+            right = max(0, content_width - line_width - left)
+        elif align == "right":
+            left = max(0, content_width - line_width)
+            right = 0
+        else:
+            left = 1
+            right = max(0, content_width - line_width - left)
+        rows.append(paint("=" + (" " * left) + raw + (" " * right) + "=", PALETTE["gold"], BOLD))
     rows.append(border)
     return "\n".join(rows)

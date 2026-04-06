@@ -17,6 +17,7 @@ run 协议统一化与模型配置化：修复 split-run 漂移、清除旧 `cop
 - **看板风格回归简洁**：安装看板、detached 启动看板与状态看板规范保持原始无额外配色的简洁风格，同时保留右侧开口框与统一版式
 - **安装兼容 `curl | bash`**：修复通过标准输入执行时 `BASH_SOURCE[0]` 为空导致的 `unbound variable` 提示
 - **模型配置提醒补齐**：安装看板会显式告诉用户默认模型配置文件位置，以及 `commandDefaults / skillDefaults / codingAuditModel` 的修改入口
+- **doctor 体检看板升级**：`ilongrun-doctor --refresh-model-cache` 改为输出面向新手的中文环境体检看板，整合命令入口、登录状态、模型缓存、自检结果与 `/fleet` 能力摘要，不再把长串原始日志直接倾倒到终端
 
 ### 新增
 - **`model-policy.jsonc`**：默认模型改为注释化 JSONC 配置，支持 `commandDefaults` / `skillDefaults` / `roleModels` / `codingAuditModel` / `fallback`

@@ -95,7 +95,79 @@ def main() -> int:
             "--model-config", str(ROOT.parent / "config" / "model-policy.jsonc"),
         )
         assert "知识船仓·公益社区" in install_board.stdout
+        assert "倾力制作～" in install_board.stdout
         assert "====" in install_board.stdout
+
+        doctor_checks = temp_root / "doctor-checks.tsv"
+        doctor_checks.write_text(
+            "\n".join(
+                [
+                    "launcher.ilongrun\tok\t/tmp/ilongrun",
+                    "launcher.ilongrun-coding\tok\t/tmp/ilongrun-coding",
+                    "launcher.ilongrun-prompt\tok\t/tmp/ilongrun-prompt",
+                    "launcher.ilongrun-resume\tok\t/tmp/ilongrun-resume",
+                    "launcher.ilongrun-status\tok\t/tmp/ilongrun-status",
+                    "launcher.ilongrun-doctor\tok\t/tmp/ilongrun-doctor",
+                    "launcher.copilot-ilongrun\tok\t/tmp/copilot-ilongrun",
+                    "copilot\tok\t/tmp/copilot",
+                    "login\tok\ttest-user@https://github.com",
+                    "model_policy\tok\t/tmp/model-policy.jsonc",
+                    "legacy_plugin\tok\t未启用（copilot-mission-control）",
+                    "workspace_legacy\tok\t未发现旧工作区残留",
+                    "screen\tok\t/usr/bin/screen",
+                    "terminal_notifier\tok\t/tmp/terminal-notifier",
+                    "selftest\tok\t已通过",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        doctor_model_json = temp_root / "doctor-model.json"
+        doctor_model_json.write_text(
+            json.dumps(
+                {
+                    "ok": True,
+                    "identity": "test-user@https://github.com",
+                    "cache": str(temp_root / "model-availability.json"),
+                    "models": {
+                        "claude-sonnet-4.6": {"displayName": "Claude Sonnet 4.6", "status": "available", "reason": "probe-success"},
+                        "claude-opus-4.6": {"displayName": "Claude Opus 4.6", "status": "available", "reason": "probe-success"},
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        doctor_fleet_json = temp_root / "doctor-fleet.json"
+        doctor_fleet_json.write_text(
+            json.dumps(
+                {
+                    "ok": True,
+                    "status": "supported",
+                    "reason": "probe-success",
+                    "probeModel": "claude-sonnet-4.6",
+                    "probeModelDisplay": "Claude Sonnet 4.6",
+                    "cache": str(temp_root / "capabilities.json"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        doctor_board = run(
+            str(ROOT / "render_ilongrun_doctor_board.py"),
+            "--checks-file", str(doctor_checks),
+            "--model-probe-json", str(doctor_model_json),
+            "--fleet-probe-json", str(doctor_fleet_json),
+            "--selftest-log", str(temp_root / "selftest.err"),
+            "--refresh-cache", "1",
+        )
+        assert "环境体检看板" in doctor_board.stdout
+        assert "模型缓存刷新结果" in doctor_board.stdout
+        assert "倾力制作～" in doctor_board.stdout
 
         coding_workspace = temp_root / "coding-workspace"
         coding_workspace.mkdir(parents=True, exist_ok=True)

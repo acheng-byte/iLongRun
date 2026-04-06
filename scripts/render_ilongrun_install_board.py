@@ -221,7 +221,7 @@ def main() -> int:
     else:
         print(tone("warn", "⚠️ 安装已执行，但仍有命令未就绪；建议先执行 `ilongrun-doctor` 排查。"))
     print("")
-    print(ad_box("iLongRun - 由 zscc.in 知识船仓·公益社区 倾力之作，欢迎加入我们，这里是终身学习者的后花园"))
+    print(ad_box("iLongRun - 由 zscc.in 知识船仓·公益社区 倾力制作～\n欢迎加入我们，这里是终身学习者的后花园"))
     return 0
 
 
