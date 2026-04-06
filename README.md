@@ -60,8 +60,11 @@ ilongrun-doctor --notify-test
 
 > 如果你是首批安装 v0.3.0 的用户，重新执行一次一键安装即可补齐 `ilongrun-coding` 入口。
 > 第二条用于 **macOS 通知链路自检**。如果没有看到提醒横幅，请检查系统通知权限、专注模式和通知摘要。
-> 安装脚本与 `ilongrun-doctor` 会自动尝试卸载旧 `copilot-mission-control` 插件，避免工作区再生成 `.copilot-mission-control/`。
-> 如果本机 `copilot plugin install` 可用，安装脚本会尝试顺手注册插件；如果插件注册失败，也不会影响本地 skills + launchers 的使用。
+> 从当前 v0.4.0 更新版开始，一键安装会先执行**彻底清理**：卸载旧 `ilongrun / longrun / copilot-mission-control` 插件定义、清空旧缓存/命令/skills/agents/`~/.copilot-ilongrun` 与 `~/.copilot-mission-control`，然后再安装新版插件与 launchers。
+> 这意味着一键安装会重置旧的本地 iLongRun 状态与配置；如果你想保留自定义 `~/.copilot-ilongrun/config/model-policy.jsonc`，请先自行备份。
+> 如果本机 `copilot plugin install` 可用，安装脚本会尝试注册新版插件；如果插件注册失败，也不会影响本地 skills + launchers 的使用。
+
+安装结束后，终端会直接展示一张 **中文安装看板**，把安装状态、新手下一步、环境摘要和常用命令一次讲清楚。
 
 ---
 

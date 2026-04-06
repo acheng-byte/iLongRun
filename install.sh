@@ -23,19 +23,4 @@ else
   ROOT_DIR="$(find "$TMP_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 fi
 
-if command -v copilot >/dev/null 2>&1; then
-  copilot plugin uninstall copilot-mission-control >/dev/null 2>&1 || true
-  copilot plugin install "$REPO_SLUG" >/dev/null 2>&1 || true
-fi
-
-bash "$ROOT_DIR/scripts/install-bare-commands.sh"
-printf '\n---\n\n'
-bash "$ROOT_DIR/scripts/install-global-launcher.sh"
-printf '\n---\n\n'
-if command -v ilongrun-doctor >/dev/null 2>&1; then
-  ilongrun-doctor || true
-else
-  "$HOME/.local/bin/ilongrun-doctor" || true
-fi
-
-exit 0
+ILONGRUN_PLUGIN_SOURCE="${ILONGRUN_PLUGIN_SOURCE:-$REPO_SLUG}" bash "$ROOT_DIR/scripts/install-all.sh"

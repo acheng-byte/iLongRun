@@ -10,6 +10,11 @@ run 协议统一化与模型配置化：修复 split-run 漂移、清除旧 `cop
 - **旧插件冲突治理**：`install.sh`、`ilongrun-doctor`、`copilot-ilongrun` 启动前都会自动尝试卸载 `copilot-mission-control`，避免工作区再生成 `.copilot-mission-control/`
 - **工作区治理**：已有 `.copilot-mission-control/` 会自动归档到 `.copilot-ilongrun/legacy-imports/` 后移除，只保留一个状态根目录
 
+### 安装器更新
+- **一键安装先彻底清理再重装**：`install.sh` / `scripts/install-all.sh` 现在会先执行完整清理，卸载旧 `ilongrun / longrun / copilot-mission-control` 插件定义，删除旧缓存、旧 launchers、旧 personal skills/agents，以及 `~/.copilot-ilongrun` / `~/.copilot-mission-control`，然后再安装新版插件与命令
+- **新增 `cleanup-copilot-longrun-state.sh`**：把彻底清理逻辑沉淀为可复用 helper，避免重复手工排查和手工删除
+- **一键安装中文看板**：安装流程现在会输出品牌化中文安装向导 / 安装看板，补齐新手引导、安装成功提示与社区欢迎语
+
 ### 新增
 - **`model-policy.jsonc`**：默认模型改为注释化 JSONC 配置，支持 `commandDefaults` / `skillDefaults` / `roleModels` / `codingAuditModel` / `fallback`
 - **共享 detached 启动看板**：`ilongrun` / `ilongrun-coding` / `ilongrun-resume` 启动后会输出统一品牌风格的中文看板
