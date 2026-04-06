@@ -68,6 +68,15 @@ def build_command(args, skill_ref: str, payload: str, model: str) -> list[str]:
     return cmd
 
 
+def resolved_run_paths(args, workspace: Path, run_ref: str) -> dict[str, str]:
+    target = resolve_run_target(workspace, run_ref)
+    return {
+        "runDir": args.target_run_dir or str(target.run_dir),
+        "schedulerPath": args.target_scheduler_path or str(scheduler_path(target)),
+        "workstreamsDir": args.target_workstreams_dir or str(target.run_dir / "workstreams"),
+    }
+
+
 def run_and_stream(cmd: list[str], cwd: Path, env_patch: dict[str, str] | None = None) -> tuple[int, str]:
     env = os.environ.copy()
     if env_patch:
@@ -220,6 +229,7 @@ def build_fleet_wave_prompt(run_ref: str, wave: dict[str, object], workstreams: 
 
 def dispatch_fleet_waves(args, workspace: Path, run_ref: str, model: str) -> bool:
     target = resolve_run_target(workspace, run_ref)
+    paths = resolved_run_paths(args, workspace, run_ref)
     sched = reconcile_scheduler(target)
     pending = runnable_fleet_waves(sched)
     if not pending:
@@ -245,6 +255,9 @@ def dispatch_fleet_waves(args, workspace: Path, run_ref: str, model: str) -> boo
             "LONGRUN_SELECTED_MODEL": model,
             "LONGRUN_MODEL_CONTROL_MODE": "launcher-enforced",
             "LONGRUN_RUN_ID": run_ref,
+            "LONGRUN_RUN_DIR": paths["runDir"],
+            "LONGRUN_SCHEDULER_PATH": paths["schedulerPath"],
+            "LONGRUN_WORKSTREAMS_DIR": paths["workstreamsDir"],
             "LONGRUN_LAUNCH_MODE": "ilongrun-fleet-wave",
             "ILONGRUN_FLEET_EXECUTION": "1",
             "ILONGRUN_FLEET_WAVE_ID": str(wave.get("id")),
@@ -274,12 +287,16 @@ def dispatch_fleet_waves(args, workspace: Path, run_ref: str, model: str) -> boo
 def resume_after_fleet(args, workspace: Path, run_ref: str, model: str) -> bool:
     if not args.resume_skill_ref:
         return False
+    paths = resolved_run_paths(args, workspace, run_ref)
     payload = run_ref
     cmd = build_command(args, args.resume_skill_ref, payload, model)
     rc, output = run_and_stream(cmd, workspace, {
         "LONGRUN_SELECTED_MODEL": model,
         "LONGRUN_MODEL_CONTROL_MODE": "launcher-enforced",
         "LONGRUN_RUN_ID": run_ref,
+        "LONGRUN_RUN_DIR": paths["runDir"],
+        "LONGRUN_SCHEDULER_PATH": paths["schedulerPath"],
+        "LONGRUN_WORKSTREAMS_DIR": paths["workstreamsDir"],
         "LONGRUN_LAUNCH_MODE": "ilongrun-post-fleet-resume",
     })
     return rc == 0 and not detect_fallback_reason(output)
@@ -371,17 +388,21 @@ def maybe_finalize_blocked(workspace: Path, run_ref: str, note: str) -> None:
 
 def maybe_run_gpt54_audit(args, workspace: Path, run_ref: str) -> bool:
     target = resolve_run_target(workspace, run_ref)
+    paths = resolved_run_paths(args, workspace, run_ref)
     sched = reconcile_scheduler(target)
     if sched.get("profile") != "coding":
         return True
     if final_review_path(target).exists() and final_review_path(target).stat().st_size > 0:
         return True
     audit_model = load_model_config(args.model_config).get("codingAuditModel", "gpt-5.4")
-    print(f"[ILongRun] pending coding audit; starting GPT-5.4 audit pass ({audit_model})")
+    print(f"[ILongRun] pending coding audit; starting final audit pass ({display_model_name(audit_model, load_model_config(args.model_config))} / {audit_model})")
     payload = (
         "[ILongRun supervisor context]\n"
         f"Resume existing run-id: {run_ref}\n"
-        "Perform pending GPT-5.4 final audit only.\n"
+        f"Canonical run dir: {paths['runDir']}\n"
+        f"Canonical scheduler path: {paths['schedulerPath']}\n"
+        f"Canonical workstreams dir: {paths['workstreamsDir']}\n"
+        f"Perform pending final audit only with `{audit_model}`.\n"
         "Do not mint a new run.\n"
         "[/ILongRun supervisor context]\n\n"
         f"{run_ref}"
@@ -391,12 +412,14 @@ def maybe_run_gpt54_audit(args, workspace: Path, run_ref: str) -> bool:
         "LONGRUN_SELECTED_MODEL": audit_model,
         "LONGRUN_MODEL_CONTROL_MODE": "launcher-enforced",
         "LONGRUN_RUN_ID": run_ref,
-        "LONGRUN_RUN_DIR": str(target.run_dir),
-        "LONGRUN_LAUNCH_MODE": "ilongrun-gpt54-audit",
+        "LONGRUN_RUN_DIR": paths["runDir"],
+        "LONGRUN_SCHEDULER_PATH": paths["schedulerPath"],
+        "LONGRUN_WORKSTREAMS_DIR": paths["workstreamsDir"],
+        "LONGRUN_LAUNCH_MODE": "ilongrun-final-audit",
         "ILONGRUN_FORCE_AUDIT": "1",
     })
     if rc != 0:
-        print("[ILongRun] GPT-5.4 audit pass failed", file=sys.stderr)
+        print("[ILongRun] final audit pass failed", file=sys.stderr)
         return False
     if detect_fallback_reason(output):
         return False
@@ -419,6 +442,9 @@ def main() -> int:
     parser.add_argument("--model-config")
     parser.add_argument("--availability-cache")
     parser.add_argument("--target-run-id", default="")
+    parser.add_argument("--target-run-dir", default="")
+    parser.add_argument("--target-scheduler-path", default="")
+    parser.add_argument("--target-workstreams-dir", default="")
     parser.add_argument("--force-profile", choices=["coding", "research", "office"])
     parser.add_argument("--plugin-arg", action="append", default=[])
     args = parser.parse_args()
@@ -437,6 +463,7 @@ def main() -> int:
     current_skill = args.skill_ref
     current_payload = args.payload
     run_ref = args.target_run_id or ""
+    target_paths = resolved_run_paths(args, workspace, run_ref) if run_ref else {}
     if args.mode == "run" and run_ref:
         force_profile_line = ""
         if args.force_profile:
@@ -448,9 +475,13 @@ def main() -> int:
             "[ILongRun launcher context]\n"
             f"Assigned run-id: {run_ref}\n"
             "Use this exact run-id and do not mint a different run-id.\n"
+            f"Canonical run dir: {target_paths.get('runDir')}\n"
+            f"Canonical scheduler path: {target_paths.get('schedulerPath')}\n"
+            f"Canonical workstreams dir: {target_paths.get('workstreamsDir')}\n"
             f"{force_profile_line}"
             "If any execution wave backend is `fleet`, stop after strategy/phase/workstream/task-list decomposition and wait for external supervisor dispatch.\n"
             "Do not personally execute fleet-tagged workstreams inside the primary planning pass.\n"
+            "Do not create `.copilot-ilongrun/<run-id>/`; only use the canonical `runs/<run-id>/` directory.\n"
             "[/ILongRun launcher context]\n\n"
             f"{args.payload}"
         ).strip()
@@ -459,6 +490,10 @@ def main() -> int:
             "[ILongRun launcher context]\n"
             f"Resume existing run-id: {run_ref}\n"
             "Continue this run and do not create a new run-id.\n"
+            f"Canonical run dir: {target_paths.get('runDir')}\n"
+            f"Canonical scheduler path: {target_paths.get('schedulerPath')}\n"
+            f"Canonical workstreams dir: {target_paths.get('workstreamsDir')}\n"
+            "Do not create `.copilot-ilongrun/<run-id>/`; only use the canonical `runs/<run-id>/` directory.\n"
             "[/ILongRun launcher context]\n\n"
             f"{args.payload}"
         ).strip()
@@ -473,6 +508,9 @@ def main() -> int:
             "LONGRUN_SELECTED_MODEL": model,
             "LONGRUN_MODEL_CONTROL_MODE": "launcher-enforced",
             "LONGRUN_RUN_ID": run_ref,
+            "LONGRUN_RUN_DIR": target_paths.get("runDir", ""),
+            "LONGRUN_SCHEDULER_PATH": target_paths.get("schedulerPath", ""),
+            "LONGRUN_WORKSTREAMS_DIR": target_paths.get("workstreamsDir", ""),
             "LONGRUN_LAUNCH_MODE": "ilongrun-launcher",
         })
         fallback_reason = detect_fallback_reason(output)
@@ -483,7 +521,7 @@ def main() -> int:
                     maybe_finalize_blocked(workspace, run_ref, "ILongRun post-fleet resume failed")
                     return 1
                 if not maybe_run_gpt54_audit(args, workspace, run_ref):
-                    maybe_finalize_blocked(workspace, run_ref, "ILongRun GPT-5.4 audit pass failed")
+                    maybe_finalize_blocked(workspace, run_ref, "ILongRun final audit pass failed")
                     return 1
                 if maybe_finalize_complete(workspace, run_ref):
                     return 0
@@ -532,7 +570,7 @@ def main() -> int:
                         maybe_finalize_blocked(workspace, run_ref, "ILongRun post-fleet resume failed after retry")
                         return 1
                     if not maybe_run_gpt54_audit(args, workspace, run_ref):
-                        maybe_finalize_blocked(workspace, run_ref, "ILongRun GPT-5.4 audit pass failed after retry")
+                        maybe_finalize_blocked(workspace, run_ref, "ILongRun final audit pass failed after retry")
                         return 1
                     if maybe_finalize_complete(workspace, run_ref):
                         return 0

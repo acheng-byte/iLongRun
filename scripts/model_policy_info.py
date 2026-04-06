@@ -11,6 +11,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from _ilongrun_shared import (  # noqa: E402
     account_fingerprint,
+    configured_default_model,
     current_copilot_identity,
     display_model_name,
     load_model_config,
@@ -28,6 +29,9 @@ def main() -> int:
     parser.add_argument("--availability-cache")
     parser.add_argument("--payload")
     parser.add_argument("--explicit-model")
+    parser.add_argument("--subcommand")
+    parser.add_argument("--skill")
+    parser.add_argument("--role")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -41,23 +45,42 @@ def main() -> int:
         print(json.dumps({"ok": False, "errors": errors}, ensure_ascii=False, indent=2) if args.json else "\n".join(errors))
         return 2
     if args.json:
-        chain = model_chain(config, explicit_model=args.explicit_model, prompt_text=args.payload, availability=availability)
-        latest_opus = next((item for item in config.get("preferred", []) if availability.get(item, {}).get("status") == "available"), None)
+        chain = model_chain(
+            config,
+            explicit_model=args.explicit_model,
+            prompt_text=args.payload,
+            command=args.subcommand,
+            skill=args.skill,
+            role=args.role,
+            availability=availability,
+        )
+        selected = chain[0] if chain else configured_default_model(config, command=args.subcommand, skill=args.skill, role=args.role) or config.get("codingAuditModel")
         print(json.dumps({
             "ok": True,
             "summary": summarize_model_strategy(config, availability),
-            "selected": chain[0],
-            "selectedDisplay": display_model_name(chain[0], config),
+            "selected": selected,
+            "selectedDisplay": display_model_name(selected, config) if selected else None,
             "chain": chain,
-            "latestAvailableOpus": latest_opus,
+            "commandDefault": configured_default_model(config, command=args.subcommand),
+            "skillDefault": configured_default_model(config, skill=args.skill),
+            "roleDefault": configured_default_model(config, role=args.role),
+            "codingAuditModel": config.get("codingAuditModel"),
             "identity": identity,
             "accountFingerprint": fingerprint,
             "availability": availability,
         }, ensure_ascii=False, indent=2))
         return 0
     print(summarize_model_strategy(config, availability))
-    if args.payload or args.explicit_model:
-        chain = model_chain(config, explicit_model=args.explicit_model, prompt_text=args.payload, availability=availability)
+    if args.payload or args.explicit_model or args.subcommand or args.skill or args.role:
+        chain = model_chain(
+            config,
+            explicit_model=args.explicit_model,
+            prompt_text=args.payload,
+            command=args.subcommand,
+            skill=args.skill,
+            role=args.role,
+            availability=availability,
+        )
         print(f"选中模型: {display_model_name(chain[0], config)} ({chain[0]})")
     return 0
 

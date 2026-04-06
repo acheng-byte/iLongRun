@@ -23,6 +23,7 @@ from _ilongrun_lib import (
     set_active_run,
     set_latest_run,
     sync_projections,
+    workstreams_dir,
     write_json_atomic,
 )
 
@@ -75,7 +76,14 @@ def main() -> int:
     write_json_atomic(scheduler_path(target), scheduler)
     append_jsonl(journal_path(target), {"ts": scheduler.get("createdAt"), "source": "helper", "event": "run-prepared", "payload": {"runId": target.run_id, "launcherMode": args.launcher_mode}})
 
-    result = {"workspace": str(target.workspace), "runId": target.run_id, "runDir": str(target.run_dir), "schedulerPath": str(scheduler_path(target))}
+    result = {
+        "workspace": str(target.workspace),
+        "runId": target.run_id,
+        "runDir": str(target.run_dir),
+        "schedulerPath": str(scheduler_path(target)),
+        "workstreamsDir": str(workstreams_dir(target)),
+        "legacyRunDir": str(target.base / target.run_id),
+    }
     if args.do_print:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:

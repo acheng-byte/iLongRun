@@ -9,12 +9,13 @@ DEFAULT_MAX_CONTINUES="${COPILOT_ILONGRUN_MAX_CONTINUES:-120}"
 ILONGRUN_HOME="${ILONGRUN_HOME:-$HOME/.copilot-ilongrun}"
 HELPER_BIN_DIR="$ILONGRUN_HOME/bin"
 HELPER_CONFIG_DIR="$ILONGRUN_HOME/config"
-MODEL_CONFIG_PATH_DEFAULT="$HELPER_CONFIG_DIR/model-policy.json"
+MODEL_CONFIG_PATH_DEFAULT="$HELPER_CONFIG_DIR/model-policy.jsonc"
 MODEL_AVAILABILITY_PATH_DEFAULT="$HELPER_CONFIG_DIR/model-availability.json"
 LAUNCHER_DIR_NAME=".copilot-ilongrun/launcher"
 COPILOT_CONFIG_DIR="${COPILOT_CONFIG_DIR:-$HOME/.copilot}"
 COPILOT_BIN="${COPILOT_BIN:-$DEFAULT_COPILOT_BIN}"
 SCREEN_BIN="${SCREEN_BIN:-$DEFAULT_SCREEN_BIN}"
+LEGACY_PLUGIN_NAME="copilot-mission-control"
 
 resolve_script_dir() {
   local source="${BASH_SOURCE[0]}"
@@ -78,12 +79,12 @@ find_bin_from_common_locations() {
 
 helper_path() {
   local name="$1"
-  if [ -x "$HELPER_BIN_DIR/$name" ]; then
-    printf '%s\n' "$HELPER_BIN_DIR/$name"
-    return 0
-  fi
   if [ -x "$REPO_ROOT/scripts/$name" ]; then
     printf '%s\n' "$REPO_ROOT/scripts/$name"
+    return 0
+  fi
+  if [ -x "$HELPER_BIN_DIR/$name" ]; then
+    printf '%s\n' "$HELPER_BIN_DIR/$name"
     return 0
   fi
   return 1
@@ -166,9 +167,49 @@ raise SystemExit(1)
 PY
 }
 
+legacy_plugin_enabled() {
+  python3 - "$COPILOT_CONFIG_DIR/config.json" "$LEGACY_PLUGIN_NAME" <<'PY'
+import json, sys
+from pathlib import Path
+cfg = Path(sys.argv[1])
+name = sys.argv[2]
+if cfg.exists():
+    try:
+        obj = json.loads(cfg.read_text(encoding='utf-8'))
+    except Exception:
+        obj = {}
+    for item in obj.get('installed_plugins') or []:
+        if item.get('name') == name and item.get('enabled', False):
+            raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+auto_uninstall_legacy_plugin() {
+  local copilot_cmd="${COPILOT_REAL_BIN:-$(copilot_path || true)}"
+  [ -n "$copilot_cmd" ] || return 1
+  legacy_plugin_enabled || return 0
+  printf '[WARN] 检测到旧插件 %s，正在自动卸载...\n' "$LEGACY_PLUGIN_NAME" >&2
+  "$copilot_cmd" plugin uninstall "$LEGACY_PLUGIN_NAME" >/dev/null 2>&1 || true
+  sleep 1
+  legacy_plugin_enabled && return 1 || return 0
+}
+
+cleanup_legacy_workspace_state() {
+  local helper
+  helper="$(helper_path cleanup_legacy_workspace.py || true)"
+  [ -n "$helper" ] || return 0
+  python3 "$helper" --workspace "$PWD" --print-json 2>/dev/null || true
+}
+
 ensure_model_paths() {
   if [ -f "$MODEL_CONFIG_PATH_DEFAULT" ]; then
     MODEL_CONFIG_PATH="$MODEL_CONFIG_PATH_DEFAULT"
+  elif [ -f "${MODEL_CONFIG_PATH_DEFAULT%.jsonc}.json" ]; then
+    mv "${MODEL_CONFIG_PATH_DEFAULT%.jsonc}.json" "$MODEL_CONFIG_PATH_DEFAULT"
+    MODEL_CONFIG_PATH="$MODEL_CONFIG_PATH_DEFAULT"
+  elif [ -f "$REPO_ROOT/config/model-policy.jsonc" ]; then
+    MODEL_CONFIG_PATH="$REPO_ROOT/config/model-policy.jsonc"
   else
     MODEL_CONFIG_PATH="$REPO_ROOT/config/model-policy.json"
   fi
@@ -185,15 +226,30 @@ preflight_or_die() {
   [ -n "$COPILOT_REAL_BIN" ] || die "copilot CLI not found"
   ensure_model_paths
   detect_copilot_login >/dev/null 2>&1 || die "copilot CLI is not authenticated. Run: copilot login"
+  auto_uninstall_legacy_plugin || die "legacy plugin '$LEGACY_PLUGIN_NAME' is still enabled; uninstall it before running ilongrun"
+  cleanup_legacy_workspace_state >/dev/null 2>&1 || true
 }
 
 selected_model_for_payload() {
-  local payload="$1"
-  local explicit_model="${2:-}"
+  local subcommand="$1"
+  local payload="$2"
+  local explicit_model="${3:-}"
   local helper
   helper="$(helper_path model_policy_info.py || true)"
-  [ -n "$helper" ] || { printf 'claude-opus-4.6\n'; return 0; }
-  local cmd=(python3 "$helper" --config "$MODEL_CONFIG_PATH" --availability-cache "$MODEL_AVAILABILITY_PATH" --payload "$payload" --json)
+  [ -n "$helper" ] || { printf 'claude-sonnet-4.6\n'; return 0; }
+  local skill_name="ilongrun"
+  case "$subcommand" in
+    run) skill_name="ilongrun" ;;
+    coding) skill_name="ilongrun-coding" ;;
+    prompt) skill_name="ilongrun-prompt" ;;
+    resume) skill_name="ilongrun-resume" ;;
+    status) skill_name="ilongrun-status" ;;
+    doctor) skill_name="ilongrun-doctor" ;;
+  esac
+  local role_name="mission-governor"
+  [ "$subcommand" = "coding" ] && role_name="executor"
+  [ "$subcommand" = "status" ] && role_name="mission-governor"
+  local cmd=(python3 "$helper" --config "$MODEL_CONFIG_PATH" --availability-cache "$MODEL_AVAILABILITY_PATH" --subcommand "$subcommand" --skill "$skill_name" --role "$role_name" --payload "$payload" --json)
   [ -n "$explicit_model" ] && cmd+=(--explicit-model "$explicit_model")
   "${cmd[@]}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["selected"])'
 }
@@ -230,7 +286,7 @@ PY
 launch_detached_via_screen() {
   local subcommand="$1" payload="$2" log_file="$3" meta_file="$4" selected_model="$5" run_ref="$6"
   shift 6
-  local screen_bin session_name joined workspace_q log_q
+  local screen_bin session_name joined workspace_q log_q board_helper
   screen_bin="$(screen_path || true)"
   [ -n "$screen_bin" ] || die "Detached mode requires screen"
   session_name="ilongrun-${subcommand}-$(date +%Y%m%d-%H%M%S)"
@@ -247,10 +303,23 @@ PY
 )"
   "$screen_bin" -dmS "$session_name" bash -lc "cd $workspace_q && $joined >> $log_q 2>&1"
   write_meta "$meta_file" "$subcommand" "$payload" "$log_file" "$SKILL_MODE" "$joined" "$selected_model"
-  printf '[OK] detached session started: %s\n' "$session_name"
-  printf '  log: %s\n' "$log_file"
-  printf '  meta: %s\n' "$meta_file"
-  printf '  status: ilongrun-status latest\n'
+  board_helper="$(helper_path render_ilongrun_launch_board.py || true)"
+  if [ -n "$board_helper" ]; then
+    python3 "$board_helper" \
+      --workspace "$PWD" \
+      --run-id "$run_ref" \
+      --subcommand "$subcommand" \
+      --log-file "$log_file" \
+      --meta-file "$meta_file" \
+      --selected-model "$selected_model" \
+      --model-config "$MODEL_CONFIG_PATH" \
+      || true
+  else
+    printf '[OK] detached session started: %s\n' "$session_name"
+    printf '  log: %s\n' "$log_file"
+    printf '  meta: %s\n' "$meta_file"
+    printf '  status: ilongrun-status %s\n' "$run_ref"
+  fi
   send_launch_notification "$subcommand" "$run_ref"
 }
 
@@ -295,6 +364,7 @@ doctor() {
   local helper_probe="$(helper_path probe_models.py || true)"
   local helper_fleet_probe="$(helper_path probe_fleet_capability.py || true)"
   local helper_notify="$(helper_path notify_macos.py || true)"
+  local helper_cleanup="$(helper_path cleanup_legacy_workspace.py || true)"
   local expected_launchers=(ilongrun ilongrun-coding ilongrun-prompt ilongrun-resume ilongrun-status ilongrun-doctor copilot-ilongrun)
   ensure_model_paths || true
   for launcher in "${expected_launchers[@]}"; do
@@ -318,6 +388,27 @@ doctor() {
   if [ -n "$copilot_bin" ]; then printf '[OK] copilot: %s\n' "$copilot_bin"; else printf '[FAIL] copilot CLI not found\n'; issues=$((issues+1)); fi
   if [ -n "$login" ]; then printf '[OK] login: %s\n' "$login"; else printf '[FAIL] copilot login missing\n'; issues=$((issues+1)); fi
   if [ -f "$MODEL_CONFIG_PATH" ]; then printf '[OK] model policy: %s\n' "$MODEL_CONFIG_PATH"; else printf '[FAIL] model policy missing\n'; issues=$((issues+1)); fi
+  if legacy_plugin_enabled; then
+    if auto_uninstall_legacy_plugin; then
+      printf '[OK] legacy plugin removed: %s\n' "$LEGACY_PLUGIN_NAME"
+    else
+      printf '[FAIL] legacy plugin still enabled: %s\n' "$LEGACY_PLUGIN_NAME"
+      issues=$((issues+1))
+    fi
+  else
+    printf '[OK] legacy plugin not enabled: %s\n' "$LEGACY_PLUGIN_NAME"
+  fi
+  if [ -n "$helper_cleanup" ]; then
+    cleanup_result="$(python3 "$helper_cleanup" --workspace "$PWD" --print-json 2>/dev/null || true)"
+    cleanup_action="$(printf '%s' "$cleanup_result" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data.get("action","noop"))' 2>/dev/null || printf 'noop')"
+    cleanup_archive="$(printf '%s' "$cleanup_result" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data.get("archivePath") or "")' 2>/dev/null || true)"
+    if [ "$cleanup_action" = "noop" ]; then
+      printf '[OK] workspace legacy state: none\n'
+    else
+      printf '[OK] workspace legacy state cleaned: %s\n' "$cleanup_action"
+      [ -n "$cleanup_archive" ] && printf '  archived at: %s\n' "$cleanup_archive"
+    fi
+  fi
   if [ -n "$screen_bin" ]; then printf '[OK] screen: %s\n' "$screen_bin"; else printf '[WARN] screen missing; --detach unavailable\n'; fi
   if [ "$(uname -s)" = "Darwin" ]; then
     if [ -n "$mac_notifier" ]; then
@@ -329,7 +420,7 @@ doctor() {
     fi
   fi
   if [ -n "$helper_probe" ] && [ -n "$copilot_bin" ] && [ -n "$login" ]; then
-    local cmd=(python3 "$helper_probe" --copilot-bin "$copilot_bin" --config "$MODEL_CONFIG_PATH" --cache "$MODEL_AVAILABILITY_PATH" --scope preferred)
+    local cmd=(python3 "$helper_probe" --copilot-bin "$copilot_bin" --config "$MODEL_CONFIG_PATH" --cache "$MODEL_AVAILABILITY_PATH" --scope defaults)
     [ "$refresh_cache" = "1" ] && cmd+=(--refresh)
     "${cmd[@]}" | sed 's/^/  /'
   fi
@@ -463,10 +554,13 @@ case "$subcmd" in
 esac
 skill_ref="$RESOLVED_SKILL_REF"
 resume_skill_ref="$RESOLVED_RESUME_SKILL_REF"
-selected_model="$(selected_model_for_payload "$payload_text" "$model" || true)"
-[ -n "$selected_model" ] || selected_model="${model:-claude-opus-4.6}"
+selected_model="$(selected_model_for_payload "$subcmd" "$payload_text" "$model" || true)"
+[ -n "$selected_model" ] || selected_model="${model:-claude-sonnet-4.6}"
 
 prepared_run_id=""
+prepared_run_dir=""
+prepared_scheduler_path=""
+prepared_workstreams_dir=""
 supervisor_mode="$subcmd"
 [ "$subcmd" = "coding" ] && supervisor_mode="run"
 if [ "$subcmd" = "run" ] || [ "$subcmd" = "coding" ]; then
@@ -478,6 +572,9 @@ if [ "$subcmd" = "run" ] || [ "$subcmd" = "coding" ]; then
     [ -n "$force_profile" ] && prepare_cmd+=(--force-profile "$force_profile")
     prepared_json="$("${prepare_cmd[@]}")" || die "failed to prepare fresh ILongRun run"
     prepared_run_id="$(printf '%s' "$prepared_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["runId"])')"
+    prepared_run_dir="$(printf '%s' "$prepared_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["runDir"])')"
+    prepared_scheduler_path="$(printf '%s' "$prepared_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["schedulerPath"])')"
+    prepared_workstreams_dir="$(printf '%s' "$prepared_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["workstreamsDir"])')"
   fi
 fi
 
@@ -488,6 +585,9 @@ supervisor_cmd=(python3 "$SUPERVISOR" --workspace "$PWD" --copilot-bin "$COPILOT
 [ -n "$resume_skill_ref" ] && supervisor_cmd+=(--resume-skill-ref "$resume_skill_ref")
 for arg in "${PLUGIN_ARGS[@]:-}"; do [ -n "$arg" ] && supervisor_cmd+=(--plugin-arg "$arg"); done
 [ -n "$prepared_run_id" ] && supervisor_cmd+=(--target-run-id "$prepared_run_id")
+[ -n "$prepared_run_dir" ] && supervisor_cmd+=(--target-run-dir "$prepared_run_dir")
+[ -n "$prepared_scheduler_path" ] && supervisor_cmd+=(--target-scheduler-path "$prepared_scheduler_path")
+[ -n "$prepared_workstreams_dir" ] && supervisor_cmd+=(--target-workstreams-dir "$prepared_workstreams_dir")
 [ -z "$prepared_run_id" ] && [ "$subcmd" = "resume" ] && supervisor_cmd+=(--target-run-id "$payload_text")
 [ -n "$model" ] && supervisor_cmd+=(--explicit-model "$model")
 [ -n "$force_profile" ] && supervisor_cmd+=(--force-profile "$force_profile")

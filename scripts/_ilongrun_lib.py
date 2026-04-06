@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ from _ilongrun_shared import (
     normalize_model_name,
     now_iso,
     parse_json_argument,
+    parse_iso,
     prompt_stem,
     read_json,
     read_model_availability,
@@ -42,7 +44,7 @@ from _ilongrun_shared import (
 )
 
 ILONGRUN_HOME = Path(os.environ.get("ILONGRUN_HOME", str(Path.home() / ".copilot-ilongrun")))
-DEFAULT_MODEL_CONFIG = ILONGRUN_HOME / "config" / "model-policy.json"
+DEFAULT_MODEL_CONFIG = ILONGRUN_HOME / "config" / "model-policy.jsonc"
 DEFAULT_MODEL_AVAILABILITY = ILONGRUN_HOME / "config" / "model-availability.json"
 MANAGED_PLAN_START = "<!-- ILONGRUN:PLAN:START -->"
 MANAGED_PLAN_END = "<!-- ILONGRUN:PLAN:END -->"
@@ -63,34 +65,11 @@ class RunTarget:
 
 
 def default_model_config() -> dict[str, Any]:
-    base = base_default_model_config()
-    base.update(
-        {
-            "defaultPolicy": "ability-first-hybrid",
-            "roleModels": {
-                "mission-governor": "claude-opus-4.6",
-                "strategy-synthesizer": "claude-opus-4.6",
-                "phase-planner": "claude-opus-4.6",
-                "workstream-planner": "claude-opus-4.6",
-                "executor": "claude-opus-4.6",
-                "recovery-agent": "claude-opus-4.6",
-                "gpt54-audit-reviewer": "gpt-5.4",
-            },
-            "codingAuditModel": "gpt-5.4",
-        }
-    )
-    return base
+    return base_default_model_config()
 
 
 def load_model_config(path: str | Path | None = None) -> dict[str, Any]:
-    config_path = Path(path).expanduser() if path else DEFAULT_MODEL_CONFIG
-    config = read_json(config_path, default_model_config())
-    merged = default_model_config()
-    merged.update({k: v for k, v in config.items() if k not in {"displayNames", "aliases", "roleModels"}})
-    merged["displayNames"] = shallow_merge(default_model_config()["displayNames"], config.get("displayNames", {}))
-    merged["aliases"] = shallow_merge(default_model_config()["aliases"], config.get("aliases", {}))
-    merged["roleModels"] = shallow_merge(default_model_config()["roleModels"], config.get("roleModels", {}))
-    return merged
+    return load_base_model_config(path)
 
 
 def availability_cache_path_for_ilongrun(path: str | Path | None = None) -> Path:
@@ -215,6 +194,226 @@ def workstream_evidence_path(target: RunTarget, workstream_id: str) -> Path:
     return workstream_dir(target, workstream_id) / "evidence.md"
 
 
+def legacy_run_dir(target: RunTarget) -> Path:
+    return target.base / target.run_id
+
+
+def legacy_imports_dir(target: RunTarget) -> Path:
+    return target.base / "legacy-imports"
+
+
+def merge_report_dir(target: RunTarget) -> Path:
+    return legacy_imports_dir(target) / "run-merges"
+
+
+def status_rank(status: str | None) -> int:
+    order = {
+        "pending": 0,
+        "running": 1,
+        "blocked": 2,
+        "complete": 3,
+        "verified": 4,
+    }
+    return order.get((status or "").lower(), 0)
+
+
+def is_placeholder_work_product(path: Path, text: str | None = None) -> bool:
+    body = (text if text is not None else read_text(path, "")).strip()
+    if not body:
+        return True
+    name = path.name
+    if name == "result.md" and body.startswith("# Result") and "Pending result for `" in body:
+        return True
+    if name == "evidence.md" and body.startswith("# Evidence") and "Pending evidence for `" in body:
+        return True
+    if name == "status.json":
+        data = read_json(path, {})
+        return (data.get("status") or "").lower() in {"", "pending"}
+    return False
+
+
+def append_unique_jsonl(dst: Path, src: Path) -> int:
+    existing_lines = set(read_text(dst, "").splitlines()) if dst.exists() else set()
+    appended = 0
+    ensure_dir(dst.parent)
+    for line in read_text(src, "").splitlines():
+        if not line or line in existing_lines:
+            continue
+        with dst.open("a", encoding="utf-8") as handle:
+            handle.write(line.rstrip() + "\n")
+        existing_lines.add(line)
+        appended += 1
+    return appended
+
+
+def scheduler_signal_score(scheduler: dict[str, Any]) -> tuple[int, str]:
+    raw_workstreams = scheduler.get("workstreams") or []
+    if isinstance(raw_workstreams, dict):
+        workstreams = list(raw_workstreams.values())
+    else:
+        workstreams = list(raw_workstreams)
+    completed = len([ws for ws in workstreams if isinstance(ws, dict) and (ws.get("status") or "").lower() in {"done", "complete", "verified", "pass", "passed"}])
+    reviews = scheduler.get("reviews") or {}
+    deliverables = len([item for item in scheduler.get("deliverables") or [] if item])
+    state_bonus = {"complete": 40, "blocked": 20, "running": 10}.get((scheduler.get("state") or "").lower(), 0)
+    score = (
+        completed * 10
+        + deliverables * 3
+        + (15 if reviews.get("status") in {"passed", "failed"} else 0)
+        + (8 if (reviews.get("pendingMustFixCount") or 0) == 0 and reviews.get("status") in {"passed", "not-required"} else 0)
+        + state_bonus
+    )
+    updated = scheduler.get("updatedAt") or ""
+    return score, updated
+
+
+def normalize_legacy_scheduler_shape(canonical: dict[str, Any], legacy: dict[str, Any], run_id: str) -> dict[str, Any]:
+    if isinstance(legacy.get("workstreams"), list):
+        return legacy
+    if not isinstance(legacy.get("workstreams"), dict):
+        return legacy
+
+    imported = ensure_scheduler_defaults(copy.deepcopy(canonical))
+    imported["runId"] = run_id
+    imported["profile"] = legacy.get("profile") or imported.get("profile")
+    imported["createdAt"] = legacy.get("created") or imported.get("createdAt")
+    imported["updatedAt"] = legacy.get("updated") or imported.get("updatedAt")
+    imported["summary"] = "Imported legacy root-directory run state"
+
+    legacy_items = list((legacy.get("workstreams") or {}).values())
+    all_done = legacy_items and all(str((item or {}).get("status", "")).lower() in {"done", "complete", "verified", "pass", "passed"} for item in legacy_items)
+    if all_done:
+        for ws in imported.get("workstreams") or []:
+            ws["status"] = "complete"
+        imported["completedWorkstreams"] = [ws["id"] for ws in imported.get("workstreams") or []]
+        imported["activeWorkstreams"] = []
+        imported["phase"] = "phase-finalize"
+
+    gates = legacy.get("gates") or {}
+    audit_gate = str(gates.get("gpt54Audit") or "").lower()
+    if audit_gate in {"fail", "failed", "blocked"}:
+        imported["state"] = "blocked"
+        imported["phase"] = "phase-audit"
+        imported.setdefault("reviews", {})["status"] = "failed"
+        imported["reviews"]["pendingMustFixCount"] = max(int((imported.get("reviews") or {}).get("pendingMustFixCount") or 0), 1)
+    elif str(legacy.get("status") or "").lower() in {"finalized", "complete", "completed"} and all_done:
+        imported["state"] = "complete"
+
+    return imported
+
+
+def choose_preferred_scheduler(primary: dict[str, Any], secondary: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], str]:
+    primary_score, primary_updated = scheduler_signal_score(primary)
+    secondary_score, secondary_updated = scheduler_signal_score(secondary)
+    if primary_score > secondary_score:
+        return primary, secondary, "higher-signal"
+    if secondary_score > primary_score:
+        return secondary, primary, "higher-signal"
+    primary_dt = parse_iso(primary_updated)
+    secondary_dt = parse_iso(secondary_updated)
+    if primary_dt and secondary_dt:
+        if primary_dt >= secondary_dt:
+            return primary, secondary, "newer-updatedAt"
+        return secondary, primary, "newer-updatedAt"
+    return primary, secondary, "tie-primary"
+
+
+def merge_scheduler_payloads(canonical: dict[str, Any], legacy: dict[str, Any], run_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    legacy = normalize_legacy_scheduler_shape(canonical, legacy, run_id)
+    preferred, supplemental, reason = choose_preferred_scheduler(legacy, canonical)
+    merged = shallow_merge(supplemental, preferred)
+    created_candidates = [value for value in [canonical.get("createdAt"), legacy.get("createdAt")] if value]
+    updated_candidates = [value for value in [canonical.get("updatedAt"), legacy.get("updatedAt")] if value]
+    if created_candidates:
+        merged["createdAt"] = sorted(created_candidates)[0]
+    if updated_candidates:
+        merged["updatedAt"] = sorted(updated_candidates)[-1]
+    merged["runId"] = run_id
+    migration = {
+        "preferredSource": "legacy" if preferred is legacy else "canonical",
+        "reason": reason,
+        "canonicalUpdatedAt": canonical.get("updatedAt"),
+        "legacyUpdatedAt": legacy.get("updatedAt"),
+    }
+    return merged, migration
+
+
+def merge_legacy_run_dir(target: RunTarget) -> dict[str, Any] | None:
+    legacy_dir = legacy_run_dir(target)
+    if not legacy_dir.exists() or legacy_dir == target.run_dir:
+        return None
+
+    ensure_dir(target.run_dir)
+    ensure_dir(merge_report_dir(target))
+    canonical_scheduler = read_json(scheduler_path(target), {})
+    legacy_scheduler = read_json(legacy_dir / "scheduler.json", {})
+    merged_scheduler, migration = merge_scheduler_payloads(canonical_scheduler, legacy_scheduler, target.run_id)
+    write_json_atomic(scheduler_path(target), merged_scheduler)
+
+    copied_files: list[str] = []
+    appended_jsonl: dict[str, int] = {}
+
+    for rel in ["journal.jsonl", "hook-events.jsonl"]:
+        src = legacy_dir / rel
+        dst = target.run_dir / rel
+        if src.exists():
+            appended = append_unique_jsonl(dst, src)
+            if appended:
+                appended_jsonl[rel] = appended
+
+    candidate_patterns = [
+        "COMPLETION.md",
+        "reviews/*.md",
+        "workstreams/*/result.md",
+        "workstreams/*/evidence.md",
+        "workstreams/*/status.json",
+    ]
+    for pattern in candidate_patterns:
+        for src in legacy_dir.glob(pattern):
+            if src.is_dir():
+                continue
+            rel = src.relative_to(legacy_dir)
+            dst = target.run_dir / rel
+            ensure_dir(dst.parent)
+            if src.name == "status.json":
+                src_status = read_json(src, {})
+                dst_status = read_json(dst, {})
+                if not dst.exists() or status_rank(src_status.get("status")) >= status_rank(dst_status.get("status")):
+                    shutil.copy2(src, dst)
+                    copied_files.append(str(rel))
+                continue
+            if rel.as_posix() in {"journal.jsonl", "hook-events.jsonl"}:
+                continue
+            if not dst.exists():
+                shutil.copy2(src, dst)
+                copied_files.append(str(rel))
+                continue
+            src_text = read_text(src, "")
+            dst_text = read_text(dst, "")
+            should_replace = False
+            if is_placeholder_work_product(dst, dst_text) and not is_placeholder_work_product(src, src_text):
+                should_replace = True
+            elif src.stat().st_mtime >= dst.stat().st_mtime and len(src_text.strip()) > len(dst_text.strip()):
+                should_replace = True
+            if should_replace:
+                shutil.copy2(src, dst)
+                copied_files.append(str(rel))
+
+    report = {
+        "ts": now_iso(),
+        "runId": target.run_id,
+        "canonicalRunDir": str(target.run_dir),
+        "legacyRunDir": str(legacy_dir),
+        "migration": migration,
+        "copiedFiles": copied_files,
+        "appendedJsonl": appended_jsonl,
+    }
+    report_path = merge_report_dir(target) / f"{target.run_id}-{now_iso().replace(':', '').replace('-', '')}.json"
+    write_json_atomic(report_path, report)
+    shutil.rmtree(legacy_dir, ignore_errors=True)
+    return report
+
+
 def profile_from_prompt(prompt: str) -> str:
     lowered = prompt.lower()
     coding_signals = ["代码", "bug", "测试", "构建", "重构", "脚本", "repo", "ci", "fix", "implement", "refactor", "test", "debug", "build", "audit", "review"]
@@ -336,7 +535,7 @@ def infer_completeness(prompt: str, profile: str, mode: str) -> list[str]:
     if profile == "coding":
         items.extend([
             "必须保留本地验证步骤与回归检查",
-            "finalize 前必须存在 GPT-5.4 终审报告",
+            "finalize 前必须存在最终终审报告",
         ])
     if profile in {"research", "office"}:
         items.append("需要保留证据链和来源说明")
@@ -542,11 +741,11 @@ def infer_initial_topology(prompt: str, profile: str, mode: str, config: dict[st
     if profile == "coding":
         phases.append({
             "id": "phase-audit",
-            "name": "GPT-5.4 Final Audit",
+            "name": "Final Audit",
             "status": "pending",
             "required": True,
             "waves": [
-                {"id": "wave-audit-1", "name": "Final audit", "status": "pending", "backend": "internal", "required": True, "reason": "GPT-5.4 终审不可委托给 /fleet", "workstreams": []}
+                {"id": "wave-audit-1", "name": "Final audit", "status": "pending", "backend": "internal", "required": True, "reason": "最终终审不可委托给 /fleet", "workstreams": []}
             ],
         })
     phases.append({
@@ -566,7 +765,7 @@ def default_success_criteria(profile: str, deliverables: list[str]) -> list[str]
     if deliverables:
         criteria.extend([f"交付物存在：`{item}`" for item in deliverables])
     if profile == "coding":
-        criteria.append("存在 GPT-5.4 终审报告且无未处理 must-fix")
+        criteria.append("存在最终终审报告且无未处理 must-fix")
     if profile in {"research", "office"}:
         criteria.append("关键 workstream 留下 evidence 说明")
     return criteria
@@ -628,6 +827,7 @@ def ensure_scheduler_defaults(scheduler: dict[str, Any] | None) -> dict[str, Any
     reviews.setdefault("required", payload.get("profile") == "coding")
     reviews.setdefault("finalReviewPath", REVIEW_RELATIVE_PATH)
     reviews.setdefault("adjudicationPath", ADJUDICATION_RELATIVE_PATH)
+    reviews.setdefault("auditModel", payload.get("codingAuditModel") or default_model_config().get("codingAuditModel"))
     reviews.setdefault("status", "pending" if reviews.get("required") else "not-required")
     reviews.setdefault("pendingMustFixCount", 0)
     reviews.setdefault("mustFix", [])
@@ -694,7 +894,15 @@ def init_scheduler_payload(
         fallback = [item for item in chain if item != selected]
         reason = "launcher-selected" if control_mode == "launcher-enforced" else "explicit-session-model"
     else:
-        chain = model_chain(cfg, explicit_model=preferred_model, prompt_text=prompt, availability=availability)
+        chain = model_chain(
+            cfg,
+            explicit_model=preferred_model,
+            prompt_text=prompt,
+            command="coding" if profile == "coding" else "run",
+            skill="ilongrun-coding" if profile == "coding" else "ilongrun",
+            role="mission-governor",
+            availability=availability,
+        )
         selected = chain[0] if chain else role_model_for("mission-governor", cfg)
         control_mode = model_control_mode or "launcher-enforced"
         fallback = [item for item in chain if item != selected]
@@ -714,6 +922,7 @@ def init_scheduler_payload(
             "modelPreference": preferred_model,
             "selectedModel": selected,
             "modelControlMode": control_mode,
+            "codingAuditModel": cfg.get("codingAuditModel", "gpt-5.4"),
             "modelAttemptHistory": [{"ts": now_iso(), "model": selected, "reason": reason}],
             "fallbackChain": fallback,
             "deliverables": requested_deliverables,
@@ -733,7 +942,7 @@ def init_scheduler_payload(
                 "capabilityBoundary": ["local-files", "shell"] + (["public-web"] if profile in {"research", "office"} else []),
                 "modelAllocation": {
                     role: role_model_for(role, cfg) for role in role_models(cfg)
-                },
+                } | {"final-audit": cfg.get("codingAuditModel", "gpt-5.4")},
             },
             "completedWorkstreams": [],
             "activeWorkstreams": [ws["id"] for ws in workstreams if not ws.get("dependencies")],
@@ -741,6 +950,7 @@ def init_scheduler_payload(
                 "required": profile == "coding",
                 "finalReviewPath": REVIEW_RELATIVE_PATH,
                 "adjudicationPath": ADJUDICATION_RELATIVE_PATH,
+                "auditModel": cfg.get("codingAuditModel", "gpt-5.4"),
                 "status": "pending" if profile == "coding" else "not-required",
                 "pendingMustFixCount": 0,
                 "mustFix": [],
@@ -833,6 +1043,7 @@ def build_strategy_markdown(target: RunTarget, scheduler: dict[str, Any]) -> str
     phases = scheduler.get("phases") or []
     runtime = scheduler.get("runtime") or {}
     fleet_capability = runtime.get("fleetCapability") or {}
+    audit_model = (scheduler.get("reviews") or {}).get("auditModel") or scheduler.get("codingAuditModel") or "gpt-5.4"
     lines = [
         "# ILongRun Strategy",
         "",
@@ -895,7 +1106,7 @@ def build_strategy_markdown(target: RunTarget, scheduler: dict[str, Any]) -> str
         "## Recovery / Degrade Path",
         "- Gate 失败先走 Recovery Agent。",
         "- /fleet 不可用、回填失败或独立性条件不满足时，必须降级为 `internal` 并记录原因。",
-        "- finalize 前必须通过 GPT-5.4 终审和主代理 adjudication。",
+        f"- finalize 前必须通过最终终审（`{audit_model}`）和主代理 adjudication。",
         MANAGED_STRATEGY_END,
         "",
     ])
@@ -1027,7 +1238,8 @@ def build_adjudication_markdown(target: RunTarget, scheduler: dict[str, Any]) ->
     defer = list(reviews.get("defer") or [])
     target_ws = select_adjudication_target(scheduler)
     blocking = bool(must_fix)
-    assigned_model = "gpt-5.4" if blocking else (target_ws.get("ownerModel") if target_ws else scheduler.get("selectedModel"))
+    audit_model = reviews.get("auditModel") or scheduler.get("codingAuditModel") or "gpt-5.4"
+    assigned_model = audit_model if blocking else (target_ws.get("ownerModel") if target_ws else scheduler.get("selectedModel"))
     lines = [
         "# ILongRun Adjudication",
         "",
@@ -1060,7 +1272,7 @@ def build_adjudication_markdown(target: RunTarget, scheduler: dict[str, Any]) ->
         f"- Decision: `{'return-for-fix' if blocking else 'proceed-to-finalize'}`",
         f"- Assigned workstream: `{target_ws.get('id') if target_ws else 'none'}`",
         f"- Assigned role/model: `{target_ws.get('ownerRole') if target_ws else 'mission-governor'}` / `{assigned_model}`",
-        "- Re-verification: rerun GPT-5.4 final audit after required fixes land.",
+        f"- Re-verification: rerun final audit (`{audit_model}`) after required fixes land.",
         "",
     ])
     return "\n".join(lines)
@@ -1091,6 +1303,7 @@ def ensure_run_layout(target: RunTarget) -> None:
     ensure_dir(target.run_dir / "workstreams")
     ensure_dir(target.run_dir / "reviews")
     ensure_dir(target.base / "state")
+    ensure_dir(legacy_imports_dir(target))
     for path in [journal_path(target)]:
         ensure_dir(path.parent)
         path.touch(exist_ok=True)
@@ -1102,18 +1315,20 @@ def parse_review_sections(text: str) -> dict[str, list[str]]:
     for raw_line in text.splitlines():
         line = raw_line.strip()
         lowered = line.lower()
-        if lowered.startswith("## must-fix") or lowered.startswith("## must fix"):
+        if re.match(r"^#+\s*must[- ]fix", lowered):
             current = "mustFix"
             continue
-        if lowered.startswith("## suggested fixes") or lowered.startswith("## should-fix") or lowered.startswith("## should fix"):
+        if re.match(r"^#+\s*(suggested fixes|should[- ]fix)", lowered):
             current = "shouldFix"
             continue
-        if lowered.startswith("## residual risks") or lowered.startswith("## defer"):
+        if re.match(r"^#+\s*(residual risks|defer)", lowered):
             current = "defer"
             continue
-        item = re.match(r"^[-*]\s+(.+)$", line)
+        item = re.match(r"^(?:[-*]|\d+\.)\s+(.+)$", line)
         if item and current:
-            sections[current].append(item.group(1).strip())
+            value = item.group(1).strip()
+            if value.lower() not in {"none", "无"}:
+                sections[current].append(value)
     return sections
 
 
@@ -1147,6 +1362,7 @@ def runnable_fleet_waves(scheduler: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def reconcile_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None) -> dict[str, Any]:
+    merge_legacy_run_dir(target)
     sched = ensure_scheduler_defaults(copy.deepcopy(scheduler or read_json(scheduler_path(target), {})))
     completed: list[str] = []
     active: list[str] = []
@@ -1205,6 +1421,9 @@ def reconcile_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = No
             sched["reviews"]["status"] = "failed" if sections["mustFix"] else "passed"
             adjudication_exists = adjudication_path(target).exists() and adjudication_path(target).stat().st_size > 0
             sched["reviews"]["adjudicationStatus"] = "written" if adjudication_exists else "pending"
+            if sections["mustFix"] and sched.get("state") in {"running", "blocked", "complete"}:
+                sched["state"] = "blocked"
+                sched["phase"] = "phase-audit"
         else:
             sched.setdefault("reviews", {})["status"] = "pending"
             sched["reviews"]["pendingMustFixCount"] = 0
@@ -1222,6 +1441,8 @@ def verify_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None,
     hard_failures: list[str] = []
     soft_warnings: list[str] = []
     drift_findings: list[str] = []
+    if legacy_run_dir(target).exists():
+        drift_findings.append("legacy root run directory still exists outside runs/<run-id>")
     if not mission_path(target).exists():
         hard_failures.append("mission.md is missing")
     if not strategy_path(target).exists():
@@ -1253,13 +1474,14 @@ def verify_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None,
     if sched.get("profile") == "coding":
         review_exists = final_review_path(target).exists() and final_review_path(target).stat().st_size > 0
         adjudication_exists = adjudication_path(target).exists() and adjudication_path(target).stat().st_size > 0
+        audit_model = (sched.get("reviews") or {}).get("auditModel") or sched.get("codingAuditModel") or "gpt-5.4"
         if not review_exists:
             hard_failures.append("reviews/gpt54-final-review.md is missing")
         if not adjudication_exists:
             hard_failures.append("reviews/adjudication.md is missing")
         pending = int((sched.get("reviews") or {}).get("pendingMustFixCount") or 0)
         if pending > 0:
-            hard_failures.append(f"GPT-5.4 review still has unresolved must-fix items: {pending}")
+            hard_failures.append(f"final audit ({audit_model}) still has unresolved must-fix items: {pending}")
     if sched.get("state") == "complete" and sched.get("activeWorkstreams"):
         drift_findings.append("scheduler is finalized but activeWorkstreams is not empty")
     failure_class, recommended_action = classify_failure(hard_failures, drift_findings, last_error=((sched.get("lastError") or {}).get("message") if isinstance(sched.get("lastError"), dict) else str(sched.get("lastError") or "")))

@@ -1,0 +1,106 @@
+{
+  // iLongRun v0.4.0 模型策略单一真值源
+  // 选模优先级：
+  // 1) 命令行显式 --model
+  // 2) commandDefaults（命令默认模型）
+  // 3) skillDefaults（skill 默认模型）
+  // 4) roleModels（角色默认模型）
+  // 5) fallback（通用回退链）
+  //
+  // 常用可复制模型 ID / 选择建议：
+  // | slug               | 显示名             | 难度/场景建议                     | 备注 |
+  // |--------------------|--------------------|-----------------------------------|------|
+  // | claude-sonnet-4.6  | Claude Sonnet 4.6  | 通用长跑、状态查询、提示词整理    | 默认通用命令 |
+  // | claude-opus-4.6    | Claude Opus 4.6    | 编码实现、复杂改造、重型任务      | 默认 coding |
+  // | claude-opus-4.5    | Claude Opus 4.5    | Opus 4.6 不可用时的高能力兜底     | fallback |
+  // | claude-sonnet-4.5  | Claude Sonnet 4.5  | Sonnet 4.6 不可用时的轻一级兜底   | fallback |
+  // | gpt-5.4            | GPT-5.4            | 最终终审、严谨审查、复杂推理      | 默认 audit |
+  // | claude-haiku-4.5   | Claude Haiku 4.5   | 低成本短任务、轻量触发、快速恢复  | 官方支持，建议先 doctor/probe |
+  // | gpt-5-mini         | GPT-5 mini         | 成本优先、简单整理、轻度问答      | 官方支持，建议先 doctor/probe |
+  // | gemini-3.1-pro     | Gemini 3.1 Pro     | 账号支持时的备用高能力模型        | fallback |
+  //
+  // 说明：
+  // - README 中会区分“本机已通过 doctor/probe 验证”与“官方支持但需先验证”。
+  // - 通知链路是本地行为，不读取这里的任何 notificationModel。
+  "defaultPolicy": "command-defaults-with-fallback",
+  "commandDefaults": {
+    "run": "claude-sonnet-4.6",
+    "coding": "claude-opus-4.6",
+    "prompt": "claude-sonnet-4.6",
+    "resume": "claude-sonnet-4.6",
+    "status": "claude-sonnet-4.6",
+    "doctor": "claude-sonnet-4.6"
+  },
+  "skillDefaults": {
+    "ilongrun": "claude-sonnet-4.6",
+    "ilongrun-status": "claude-sonnet-4.6",
+    "ilongrun-coding": "claude-opus-4.6",
+    "ilongrun-prompt": "claude-sonnet-4.6",
+    "ilongrun-resume": "claude-sonnet-4.6",
+    "ilongrun-doctor": "claude-sonnet-4.6",
+    "copilot-ilongrun": "claude-sonnet-4.6"
+  },
+  "roleModels": {
+    "mission-governor": "claude-sonnet-4.6",
+    "strategy-synthesizer": "claude-sonnet-4.6",
+    "phase-planner": "claude-sonnet-4.6",
+    "workstream-planner": "claude-sonnet-4.6",
+    "executor": "claude-opus-4.6",
+    "recovery-agent": "claude-sonnet-4.6",
+    "gpt54-audit-reviewer": "gpt-5.4"
+  },
+  "codingAuditModel": "gpt-5.4",
+  "fallback": [
+    "claude-opus-4.5",
+    "claude-sonnet-4.6",
+    "claude-sonnet-4.5",
+    "gpt-5.4",
+    "claude-haiku-4.5",
+    "gpt-5-mini",
+    "gemini-3.1-pro"
+  ],
+  "backoffMinutes": [2, 5, 10],
+  "availabilityTtlHours": 24,
+  "displayNames": {
+    "claude-opus-4.6": "Claude Opus 4.6",
+    "claude-opus-4.5": "Claude Opus 4.5",
+    "claude-sonnet-4.6": "Claude Sonnet 4.6",
+    "claude-sonnet-4.5": "Claude Sonnet 4.5",
+    "claude-haiku-4.5": "Claude Haiku 4.5",
+    "gpt-5.4": "GPT-5.4",
+    "gpt-5-mini": "GPT-5 mini",
+    "gemini-3.1-pro": "Gemini 3.1 Pro"
+  },
+  "aliases": {
+    "claude opus 4.6": "claude-opus-4.6",
+    "claude-opus-4.6": "claude-opus-4.6",
+    "opus 4.6": "claude-opus-4.6",
+    "opus4.6": "claude-opus-4.6",
+    "opus": "claude-opus-4.6",
+    "claude opus 4.5": "claude-opus-4.5",
+    "claude-opus-4.5": "claude-opus-4.5",
+    "opus 4.5": "claude-opus-4.5",
+    "claude sonnet 4.6": "claude-sonnet-4.6",
+    "claude-sonnet-4.6": "claude-sonnet-4.6",
+    "sonnet 4.6": "claude-sonnet-4.6",
+    "sonnet": "claude-sonnet-4.6",
+    "claude sonnet 4.5": "claude-sonnet-4.5",
+    "claude-sonnet-4.5": "claude-sonnet-4.5",
+    "sonnet 4.5": "claude-sonnet-4.5",
+    "claude haiku 4.5": "claude-haiku-4.5",
+    "claude-haiku-4.5": "claude-haiku-4.5",
+    "haiku 4.5": "claude-haiku-4.5",
+    "haiku": "claude-haiku-4.5",
+    "gpt-5.4": "gpt-5.4",
+    "gpt 5.4": "gpt-5.4",
+    "gpt5.4": "gpt-5.4",
+    "gpt-5-mini": "gpt-5-mini",
+    "gpt 5 mini": "gpt-5-mini",
+    "gpt-5 mini": "gpt-5-mini",
+    "gpt5mini": "gpt-5-mini",
+    "gpt mini": "gpt-5-mini",
+    "gemini 3.1 pro": "gemini-3.1-pro",
+    "gemini-3.1-pro": "gemini-3.1-pro",
+    "gemini 3.1": "gemini-3.1-pro"
+  }
+}

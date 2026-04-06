@@ -131,8 +131,10 @@ fi
 helpers=(
   _ilongrun_shared.py
   _ilongrun_lib.py
+  cleanup_legacy_workspace.py
   notify_macos.py
   prepare_ilongrun_run.py
+  render_ilongrun_launch_board.py
   write_ilongrun_scheduler.py
   reconcile_ilongrun_run.py
   verify_ilongrun_run.py
@@ -153,8 +155,16 @@ done
 
 maybe_install_terminal_notifier
 
-install_copied_file "$ROOT_DIR/config/model-policy.json" "$HELPER_CONFIG_DIR/model-policy.json"
-printf 'Installed model policy: %s\n' "$HELPER_CONFIG_DIR/model-policy.json"
+if [ -f "$HELPER_CONFIG_DIR/model-policy.jsonc" ]; then
+  printf 'Preserved existing model policy: %s\n' "$HELPER_CONFIG_DIR/model-policy.jsonc"
+elif [ -f "$HELPER_CONFIG_DIR/model-policy.json" ]; then
+  backup_if_needed "$HELPER_CONFIG_DIR/model-policy.json"
+  install_copied_file "$ROOT_DIR/config/model-policy.jsonc" "$HELPER_CONFIG_DIR/model-policy.jsonc"
+  printf 'Installed refreshed model policy template: %s\n' "$HELPER_CONFIG_DIR/model-policy.jsonc"
+else
+  install_copied_file "$ROOT_DIR/config/model-policy.jsonc" "$HELPER_CONFIG_DIR/model-policy.jsonc"
+  printf 'Installed model policy: %s\n' "$HELPER_CONFIG_DIR/model-policy.jsonc"
+fi
 if [ ! -f "$HELPER_CONFIG_DIR/model-availability.json" ]; then
   install_copied_file "$ROOT_DIR/config/model-availability.json" "$HELPER_CONFIG_DIR/model-availability.json"
   printf 'Installed model availability seed: %s\n' "$HELPER_CONFIG_DIR/model-availability.json"
@@ -178,4 +188,7 @@ Installed internal discipline skill:
 
 ILongRun helper bundle:
   $HELPER_BIN_DIR
+
+Model policy:
+  $HELPER_CONFIG_DIR/model-policy.jsonc
 EOF2

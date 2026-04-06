@@ -24,6 +24,7 @@ else
 fi
 
 if command -v copilot >/dev/null 2>&1; then
+  copilot plugin uninstall copilot-mission-control >/dev/null 2>&1 || true
   copilot plugin install "$REPO_SLUG" >/dev/null 2>&1 || true
 fi
 

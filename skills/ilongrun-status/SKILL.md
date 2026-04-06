@@ -23,7 +23,7 @@ disable-model-invocation: false
 3. `strategy.md`
 4. `task-list-N.md`
 5. `workstreams/ws-*/status.json`（按需）
-6. `reviews/gpt54-final-review.md`（若存在）
+6. `reviews/gpt54-final-review.md`（若存在，文件名保持兼容）
 7. `reviews/adjudication.md`（若存在）
 8. `COMPLETION.md`（若存在）
 9. `journal.jsonl` 尾部（仅在需要解释错误 / 限流时）
@@ -145,7 +145,7 @@ disable-model-invocation: false
 🔒 质量门禁
 ──────────────────────────────────
   代码审查      {gate-emoji} {display-review-status}
-  GPT-5.4 终审  {gate-emoji} {display-audit-status}
+  最终终审      {gate-emoji} {display-audit-status}
   裁决          {gate-emoji} {display-adjudication-status}
   必须修复      {pendingMustFixCount} 项
 
@@ -179,7 +179,7 @@ disable-model-invocation: false
 
 根据 `profile` 字段调整显示重点：
 
-- **`coding`**：完整显示“质量门禁”分区（代码审查 / GPT-5.4 终审 / 裁决 / 必须修复计数）。
+- **`coding`**：完整显示“质量门禁”分区（代码审查 / 最终终审 / 裁决 / 必须修复计数）。
 - **`office` / `research`**：将质量门禁分区简化为一行 `➖ 非编码任务，审查门禁不适用`，改为显示证据覆盖情况：
   ```
   📚 证据覆盖
@@ -239,7 +239,7 @@ disable-model-invocation: false
 - 波次后端与状态（internal / fleet 需中文化展示）
 - 工作流完成度（含进度条）
 - coding review gate 状态（仅 coding profile）
-- GPT-5.4 审计状态（仅 coding profile）
+- 最终终审状态（仅 coding profile）
 - adjudication 状态（仅 coding profile）
 - verification state / failure class / recommended action
 - 舰队能力 / 降级信息（仅有 fleet wave 时）

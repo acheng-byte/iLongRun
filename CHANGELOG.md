@@ -1,5 +1,34 @@
 # 更新日志
 
+## v0.4.0
+
+run 协议统一化与模型配置化：修复 split-run 漂移、清除旧 `copilot-mission-control` 污染路径，并把默认模型收敛到单一 JSONC 配置。
+
+### 修复
+- **run 漂移根因修复**：统一 canonical run 目录为 `.copilot-ilongrun/runs/<run-id>/`，辅助脚本在 reconcile/verify/finalize 时会自动收敛旧的 `.copilot-ilongrun/<run-id>/`
+- **历史 run 自愈**：新增 legacy merge 逻辑，会把旧根目录下的 review/result/evidence/journal 迁回 canonical run，并把迁移记录写入 `.copilot-ilongrun/legacy-imports/run-merges/`
+- **旧插件冲突治理**：`install.sh`、`ilongrun-doctor`、`copilot-ilongrun` 启动前都会自动尝试卸载 `copilot-mission-control`，避免工作区再生成 `.copilot-mission-control/`
+- **工作区治理**：已有 `.copilot-mission-control/` 会自动归档到 `.copilot-ilongrun/legacy-imports/` 后移除，只保留一个状态根目录
+
+### 新增
+- **`model-policy.jsonc`**：默认模型改为注释化 JSONC 配置，支持 `commandDefaults` / `skillDefaults` / `roleModels` / `codingAuditModel` / `fallback`
+- **共享 detached 启动看板**：`ilongrun` / `ilongrun-coding` / `ilongrun-resume` 启动后会输出统一品牌风格的中文看板
+- **`cleanup_legacy_workspace.py` helper**：负责归档并清理旧 `.copilot-mission-control/`
+- **`render_ilongrun_launch_board.py` helper**：负责渲染 detached 启动摘要看板
+
+### 增强
+- **默认模型映射**：
+  - `ilongrun` / `status` / `prompt` / `resume` / `doctor` → `Claude Sonnet 4.6`
+  - `ilongrun-coding` → `Claude Opus 4.6`
+  - coding 最终终审 → `GPT-5.4`
+- **文案统一**：对外展示从“固定 GPT-5.4 终审”改为“最终终审（实际模型由配置控制）”，但继续保留 `reviews/gpt54-final-review.md` 兼容路径
+- **doctor / probe**：模型探测改为围绕“默认模型 + 回退链”展开，不再依赖旧 preferred 列表
+
+### 文档
+- README 新增“默认模型与配置文件”和“目录治理”章节
+- 新增 `docs/发版说明-v0.4.0.md`
+- 快速开始补充 JSONC 配置与单根目录规则
+
 ## v0.3.0
 
 macOS 通知链路回归：把 LongRun 中成熟的系统提醒能力按 iLongRun 当前架构完整补回。

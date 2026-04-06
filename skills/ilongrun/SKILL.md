@@ -1,6 +1,6 @@
 ---
 name: ilongrun
-description: Run a persistent ILongRun mission with scheduler.json as the source of truth, planner-of-planners decomposition, optional fleet wave dispatch, recovery, and GPT-5.4 coding audit gates.
+description: Run a persistent ILongRun mission with scheduler.json as the source of truth, planner-of-planners decomposition, optional fleet wave dispatch, recovery, and configurable final-audit gates.
 allowed-tools: "*"
 user-invocable: true
 disable-model-invocation: false
@@ -12,6 +12,9 @@ disable-model-invocation: false
 
 - 真值源是 `scheduler.json` + `workstreams/*/status.json`
 - `plan.md` / `strategy.md` / `task-list-N.md` 都是投影，不是最终真值
+- canonical run 目录只能是 `.copilot-ilongrun/runs/<run-id>/`
+- 若环境变量里提供了 `LONGRUN_RUN_DIR` / `LONGRUN_SCHEDULER_PATH` / `LONGRUN_WORKSTREAMS_DIR`，必须把它们当作唯一真值路径使用
+- 不要自己创建 `.copilot-ilongrun/<run-id>/`
 - 先做 **Completeness Inference**，再决定模式、phase、wave、workstream
 - 主代理只负责：策略、裁决、重规划、收尾
 - 子规划代理负责：拆 phase / wave / task list
@@ -104,7 +107,7 @@ DEFINE → PLAN → BUILD → VERIFY → REVIEW → SHIP
 - finalize 前必须存在 `reviews/gpt54-final-review.md`
 - 必须同步生成 `reviews/adjudication.md`
 - 若 `must-fix` 非空，禁止 finalize complete
-- 若当前会话不是 GPT-5.4，且只剩 final audit，应留下 checkpoint，等待 supervisor 拉起 GPT-5.4 终审
+- 若当前会话不是要求的最终终审模型，且只剩 final audit，应留下 checkpoint，等待 supervisor 拉起最终终审
 - coding workstream 的 executor 必须遵循 `ilongrun-coding` 技能中的纪律
 - 代码审查可调用 `ILongRun Code Reviewer` 代理进行五轴审查
 
@@ -122,5 +125,5 @@ DEFINE → PLAN → BUILD → VERIFY → REVIEW → SHIP
 - [ ] coding 任务：测试覆盖主要路径 + 边界
 - [ ] coding 任务：无硬编码密钥或敏感数据
 - [ ] coding 任务：代码审查 must-fix 为空
-- [ ] GPT-5.4 终审报告存在且 must-fix 为空
+- [ ] 最终终审报告存在且 must-fix 为空
 - [ ] adjudication.md 已产出

@@ -38,8 +38,8 @@ UNSUPPORTED_SNIPPETS = [
 
 def choose_probe_model(config: dict, availability_cache_path: str | None) -> str:
     availability = model_availability_snapshot(config, cache=read_model_availability(availability_cache_path), path=availability_cache_path)
-    chain = model_chain(config, availability=availability)
-    return chain[0] if chain else config.get('preferred', ['claude-opus-4.6'])[0]
+    chain = model_chain(config, command="run", skill="ilongrun", role="mission-governor", availability=availability)
+    return chain[0] if chain else (config.get('commandDefaults', {}).get('run') or config.get('codingAuditModel') or 'claude-sonnet-4.6')
 
 
 def run_cmd(cmd: list[str], timeout: int) -> tuple[int, str]:

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 ILONGRUN_HOME = Path(os.environ.get("ILONGRUN_HOME", str(Path.home() / ".copilot-ilongrun")))
-DEFAULT_MODEL_CONFIG = ILONGRUN_HOME / "config" / "model-policy.json"
+DEFAULT_MODEL_CONFIG = ILONGRUN_HOME / "config" / "model-policy.jsonc"
 DEFAULT_MODEL_AVAILABILITY = ILONGRUN_HOME / "config" / "model-availability.json"
 COPILOT_CONFIG_DIR = Path(os.environ.get("COPILOT_CONFIG_DIR", str(Path.home() / ".copilot")))
 KNOWN_MODEL_DISPLAY = {
@@ -20,7 +20,9 @@ KNOWN_MODEL_DISPLAY = {
     "claude-opus-4.5": "Claude Opus 4.5",
     "claude-sonnet-4.6": "Claude Sonnet 4.6",
     "claude-sonnet-4.5": "Claude Sonnet 4.5",
+    "claude-haiku-4.5": "Claude Haiku 4.5",
     "gpt-5.4": "GPT-5.4",
+    "gpt-5-mini": "GPT-5 mini",
     "gemini-3.1-pro": "Gemini 3.1 Pro",
 }
 MODEL_ALIASES = {
@@ -39,9 +41,18 @@ MODEL_ALIASES = {
     "claude-sonnet-4.5": "claude-sonnet-4.5",
     "sonnet 4.5": "claude-sonnet-4.5",
     "sonnet": "claude-sonnet-4.6",
+    "claude haiku 4.5": "claude-haiku-4.5",
+    "claude-haiku-4.5": "claude-haiku-4.5",
+    "haiku 4.5": "claude-haiku-4.5",
+    "haiku": "claude-haiku-4.5",
     "gpt-5.4": "gpt-5.4",
     "gpt 5.4": "gpt-5.4",
     "gpt5.4": "gpt-5.4",
+    "gpt-5-mini": "gpt-5-mini",
+    "gpt 5 mini": "gpt-5-mini",
+    "gpt-5 mini": "gpt-5-mini",
+    "gpt5mini": "gpt-5-mini",
+    "gpt mini": "gpt-5-mini",
     "gemini 3.1 pro": "gemini-3.1-pro",
     "gemini-3.1-pro": "gemini-3.1-pro",
     "gemini 3.1": "gemini-3.1-pro",
@@ -86,6 +97,58 @@ def read_json(path: Path, default: Any = None) -> Any:
         return copy.deepcopy(default)
 
 
+def strip_jsonc_comments(text: str) -> str:
+    result: list[str] = []
+    in_string = False
+    escape = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        nxt = text[index + 1] if index + 1 < len(text) else ""
+        if in_string:
+            result.append(char)
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            result.append(char)
+            index += 1
+            continue
+        if char == "/" and nxt == "/":
+            index += 2
+            while index < len(text) and text[index] not in "\r\n":
+                index += 1
+            continue
+        if char == "/" and nxt == "*":
+            index += 2
+            while index + 1 < len(text) and not (text[index] == "*" and text[index + 1] == "/"):
+                index += 1
+            index = min(index + 2, len(text))
+            continue
+        result.append(char)
+        index += 1
+    return "".join(result)
+
+
+def read_jsonc(path: Path, default: Any = None) -> Any:
+    if default is None:
+        default = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return copy.deepcopy(default)
+    try:
+        return json.loads(strip_jsonc_comments(text))
+    except json.JSONDecodeError:
+        return copy.deepcopy(default)
+
+
 def write_json_atomic(path: Path, obj: Any) -> Path:
     ensure_dir(path.parent)
     with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False, encoding="utf-8") as tmp:
@@ -124,6 +187,29 @@ def shallow_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
+def resolve_model_config_path(path: str | Path | None = None) -> Path:
+    if path:
+        candidate = Path(path).expanduser()
+        if candidate.exists():
+            return candidate
+        if candidate.suffix == ".jsonc":
+            legacy = candidate.with_suffix(".json")
+            if legacy.exists():
+                return legacy
+        if candidate.suffix == ".json":
+            modern = candidate.with_suffix(".jsonc")
+            if modern.exists():
+                return modern
+        return candidate
+    modern_default = DEFAULT_MODEL_CONFIG
+    if modern_default.exists():
+        return modern_default
+    legacy_default = modern_default.with_suffix(".json")
+    if legacy_default.exists():
+        return legacy_default
+    return modern_default
+
+
 def resolve_workspace(path: str | None = None) -> Path:
     return Path(path or os.getcwd()).expanduser().resolve()
 
@@ -141,9 +227,43 @@ def prompt_stem(prompt: str | None) -> str:
 
 def default_model_config() -> dict[str, Any]:
     return {
-        "defaultPolicy": "ability-first-hybrid",
-        "preferred": ["claude-opus-4.6", "claude-opus-4.5"],
-        "fallback": ["claude-sonnet-4.6", "claude-sonnet-4.5", "gpt-5.4", "gemini-3.1-pro"],
+        "defaultPolicy": "command-defaults-with-fallback",
+        "commandDefaults": {
+            "run": "claude-sonnet-4.6",
+            "coding": "claude-opus-4.6",
+            "prompt": "claude-sonnet-4.6",
+            "resume": "claude-sonnet-4.6",
+            "status": "claude-sonnet-4.6",
+            "doctor": "claude-sonnet-4.6",
+        },
+        "skillDefaults": {
+            "ilongrun": "claude-sonnet-4.6",
+            "ilongrun-status": "claude-sonnet-4.6",
+            "ilongrun-coding": "claude-opus-4.6",
+            "ilongrun-prompt": "claude-sonnet-4.6",
+            "ilongrun-resume": "claude-sonnet-4.6",
+            "ilongrun-doctor": "claude-sonnet-4.6",
+            "copilot-ilongrun": "claude-sonnet-4.6",
+        },
+        "roleModels": {
+            "mission-governor": "claude-sonnet-4.6",
+            "strategy-synthesizer": "claude-sonnet-4.6",
+            "phase-planner": "claude-sonnet-4.6",
+            "workstream-planner": "claude-sonnet-4.6",
+            "executor": "claude-opus-4.6",
+            "recovery-agent": "claude-sonnet-4.6",
+            "gpt54-audit-reviewer": "gpt-5.4",
+        },
+        "codingAuditModel": "gpt-5.4",
+        "fallback": [
+            "claude-opus-4.5",
+            "claude-sonnet-4.6",
+            "claude-sonnet-4.5",
+            "gpt-5.4",
+            "claude-haiku-4.5",
+            "gpt-5-mini",
+            "gemini-3.1-pro",
+        ],
         "backoffMinutes": [2, 5, 10],
         "availabilityTtlHours": 24,
         "displayNames": KNOWN_MODEL_DISPLAY,
@@ -152,12 +272,15 @@ def default_model_config() -> dict[str, Any]:
 
 
 def load_model_config(path: str | Path | None = None) -> dict[str, Any]:
-    config_path = Path(path).expanduser() if path else DEFAULT_MODEL_CONFIG
-    config = read_json(config_path, default_model_config())
+    config_path = resolve_model_config_path(path)
+    config = read_jsonc(config_path, default_model_config()) if config_path.suffix == ".jsonc" else read_json(config_path, default_model_config())
     merged = default_model_config()
-    merged.update({k: v for k, v in config.items() if k not in {"displayNames", "aliases"}})
+    merged.update({k: v for k, v in config.items() if k not in {"displayNames", "aliases", "commandDefaults", "skillDefaults", "roleModels"}})
     merged["displayNames"] = shallow_merge(default_model_config()["displayNames"], config.get("displayNames", {}))
     merged["aliases"] = shallow_merge(default_model_config()["aliases"], config.get("aliases", {}))
+    merged["commandDefaults"] = shallow_merge(default_model_config()["commandDefaults"], config.get("commandDefaults", {}))
+    merged["skillDefaults"] = shallow_merge(default_model_config()["skillDefaults"], config.get("skillDefaults", {}))
+    merged["roleModels"] = shallow_merge(default_model_config()["roleModels"], config.get("roleModels", {}))
     return merged
 
 
@@ -215,7 +338,7 @@ def model_availability_snapshot(config: dict[str, Any], *, cache: dict[str, Any]
     ttl_hours = int(config.get("availabilityTtlHours", 24) or 24)
     models = (((cache_obj.get("accounts") or {}).get(fingerprint) or {}).get("models") or {})
     snapshot: dict[str, dict[str, Any]] = {}
-    for slug in dict.fromkeys([*config.get("preferred", []), *config.get("fallback", [])]):
+    for slug in configured_models(config):
         entry = copy.deepcopy(models.get(slug) or {})
         checked = parse_iso(entry.get("checkedAt"))
         if checked is None or (datetime.now(timezone.utc) - checked).total_seconds() > ttl_hours * 3600:
@@ -223,6 +346,36 @@ def model_availability_snapshot(config: dict[str, Any], *, cache: dict[str, Any]
             continue
         snapshot[slug] = {"status": entry.get("status", "unknown"), "reason": entry.get("reason", "cached"), "checkedAt": entry.get("checkedAt")}
     return snapshot
+
+
+def configured_models(config: dict[str, Any]) -> list[str]:
+    raw: list[str] = []
+    for value in (config.get("commandDefaults") or {}).values():
+        if value:
+            raw.append(value)
+    for value in (config.get("skillDefaults") or {}).values():
+        if value:
+            raw.append(value)
+    for value in (config.get("roleModels") or {}).values():
+        if value:
+            raw.append(value)
+    if config.get("codingAuditModel"):
+        raw.append(config["codingAuditModel"])
+    raw.extend(config.get("fallback", []) or [])
+    return list(dict.fromkeys(raw))
+
+
+def configured_default_model(config: dict[str, Any], *, command: str | None = None, skill: str | None = None, role: str | None = None) -> str | None:
+    candidates = [
+        (config.get("commandDefaults") or {}).get(command or ""),
+        (config.get("skillDefaults") or {}).get(skill or ""),
+        (config.get("roleModels") or {}).get(role or ""),
+    ]
+    for candidate in candidates:
+        normalized = normalize_model_name(candidate, config)
+        if normalized:
+            return normalized
+    return None
 
 
 def normalize_model_name(value: str | None, config: dict[str, Any] | None = None) -> str | None:
@@ -256,13 +409,24 @@ def display_model_name(slug: str, config: dict[str, Any] | None = None) -> str:
     return cfg.get("displayNames", {}).get(slug, slug)
 
 
-def model_chain(config: dict[str, Any], explicit_model: str | None = None, prompt_text: str | None = None, *, availability: dict[str, dict[str, Any]] | None = None) -> list[str]:
+def model_chain(
+    config: dict[str, Any],
+    explicit_model: str | None = None,
+    prompt_text: str | None = None,
+    *,
+    command: str | None = None,
+    skill: str | None = None,
+    role: str | None = None,
+    availability: dict[str, dict[str, Any]] | None = None,
+) -> list[str]:
     detected = normalize_model_name(explicit_model, config)
     if not detected:
         detected = detect_model_from_text(prompt_text, config)
-    base_preferred = list(dict.fromkeys(config.get("preferred", [])))
     base_fallback = list(dict.fromkeys(config.get("fallback", [])))
-    base_chain = [*base_preferred, *base_fallback]
+    configured_default = configured_default_model(config, command=command, skill=skill, role=role)
+    seed = detected or configured_default
+    base_chain = [item for item in [seed, *base_fallback] if item]
+    base_chain = list(dict.fromkeys(base_chain))
 
     def status_of(slug: str) -> str:
         if not availability:
@@ -280,20 +444,34 @@ def model_chain(config: dict[str, Any], explicit_model: str | None = None, promp
         remainder = [item for item in base_chain if item != detected and status_of(item) != "unavailable"]
         unavailable = [item for item in base_chain if item != detected and status_of(item) == "unavailable"]
         return [detected, *remainder, *unavailable]
-
-    preferred_available, preferred_unknown, _ = ordered(base_preferred)
-    fallback_available, fallback_unknown, fallback_unavailable = ordered(base_fallback)
-    chain = [*preferred_available, *preferred_unknown, *fallback_available, *fallback_unknown]
-    return chain or [*base_chain, *fallback_unavailable]
+    if seed and status_of(seed) != "unavailable":
+        remainder = [item for item in base_chain if item != seed]
+        available, unknown, unavailable = ordered(remainder)
+        return [seed, *available, *unknown, *unavailable]
+    available, unknown, unavailable = ordered(base_chain)
+    return [*available, *unknown, *unavailable] or base_chain
 
 
 def validate_model_config(config: dict[str, Any]) -> list[str]:
     known = set(KNOWN_MODEL_DISPLAY)
     errors: list[str] = []
-    for field in ("preferred", "fallback"):
+    for field in ("fallback",):
         for value in config.get(field, []):
             if value not in known:
                 errors.append(f"{field} contains unknown model slug: {value}")
+    for field in ("commandDefaults", "skillDefaults", "roleModels"):
+        raw = config.get(field, {})
+        if raw is None:
+            continue
+        if not isinstance(raw, dict):
+            errors.append(f"{field} must be an object map")
+            continue
+        for key, value in raw.items():
+            if value not in known:
+                errors.append(f"{field}.{key} points to unknown model slug: {value}")
+    audit_model = config.get("codingAuditModel")
+    if audit_model and audit_model not in known:
+        errors.append(f"codingAuditModel points to unknown model slug: {audit_model}")
     for alias, slug in config.get("aliases", {}).items():
         if slug not in known:
             errors.append(f"alias '{alias}' points to unknown model slug: {slug}")
@@ -327,15 +505,16 @@ def parse_json_argument(raw: str | None, default: Any = None) -> Any:
 
 def summarize_model_strategy(config: dict[str, Any], availability: dict[str, dict[str, Any]] | None = None) -> str:
     availability = availability or model_availability_snapshot(config)
-    available_preferred = [item for item in config.get("preferred", []) if availability.get(item, {}).get("status") == "available"]
-    latest_opus = display_model_name(available_preferred[0], config) if available_preferred else "None detected"
-    preferred = " -> ".join(display_model_name(item, config) for item in config.get("preferred", []))
+    run_default = configured_default_model(config, command="run") or "None configured"
+    coding_default = configured_default_model(config, command="coding") or "None configured"
+    audit_default = config.get("codingAuditModel") or "None configured"
     fallback = " -> ".join(display_model_name(item, config) for item in config.get("fallback", []))
     backoff = " -> ".join(f"{m}m" for m in config.get("backoffMinutes", []))
     return (
         f"默认策略: {config.get('defaultPolicy', 'ability-first-hybrid')}\n"
-        f"当前账号可用的最新 Opus: {latest_opus}\n"
-        f"优先模型: {preferred}\n"
+        f"run 默认模型: {display_model_name(run_default, config) if run_default in KNOWN_MODEL_DISPLAY else run_default}\n"
+        f"coding 默认模型: {display_model_name(coding_default, config) if coding_default in KNOWN_MODEL_DISPLAY else coding_default}\n"
+        f"最终终审模型: {display_model_name(audit_default, config) if audit_default in KNOWN_MODEL_DISPLAY else audit_default}\n"
         f"回退链: {fallback}\n"
         f"限流退避: {backoff}"
     )

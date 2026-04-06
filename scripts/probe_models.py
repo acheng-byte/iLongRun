@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from _ilongrun_shared import (  # noqa: E402
     account_fingerprint,
     availability_cache_path,
+    configured_models,
     current_copilot_identity,
     display_model_name,
     extract_rate_limit,
@@ -68,7 +69,7 @@ def main() -> int:
     parser.add_argument('--copilot-bin', default='copilot')
     parser.add_argument('--config')
     parser.add_argument('--cache')
-    parser.add_argument('--scope', choices=['preferred', 'all'], default='preferred')
+    parser.add_argument('--scope', choices=['defaults', 'all'], default='defaults')
     parser.add_argument('--refresh', action='store_true')
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--timeout-seconds', type=int, default=45)
@@ -83,7 +84,9 @@ def main() -> int:
             print('\n'.join(errors), file=sys.stderr)
         return 2
 
-    models = list(dict.fromkeys(config.get('preferred', []) + (config.get('fallback', []) if args.scope == 'all' else [])))
+    default_models = list(dict.fromkeys(configured_models(config)))
+    fallback_models = list(dict.fromkeys(config.get('fallback', []) or []))
+    models = default_models if args.scope == 'defaults' else list(dict.fromkeys([*default_models, *fallback_models]))
     identity = current_copilot_identity()
     fingerprint = account_fingerprint(identity)
     cache_path = availability_cache_path(args.cache)
@@ -112,19 +115,12 @@ def main() -> int:
     cache['version'] = 1
     write_model_availability(cache_path, cache)
 
-    latest_available_opus = None
-    for model in config.get('preferred', []):
-        if (account['models'].get(model) or {}).get('status') == 'available':
-            latest_available_opus = model
-            break
-
     payload = {
         'ok': True,
         'identity': identity,
         'accountFingerprint': fingerprint,
         'cache': str(cache_path),
         'scope': args.scope,
-        'latestAvailableOpus': latest_available_opus,
         'models': {model: account['models'].get(model, {'status': 'unknown', 'reason': 'not-probed'}) for model in models},
     }
     if args.json:
@@ -132,7 +128,6 @@ def main() -> int:
     else:
         print(f"账号: {identity}")
         print(f"缓存: {cache_path}")
-        print(f"当前账号可用的最新 Opus: {display_model_name(latest_available_opus, config) if latest_available_opus else 'None detected'}")
         for model in models:
             item = account['models'].get(model, {'status': 'unknown', 'reason': 'not-probed'})
             print(f"- {display_model_name(model, config)}: {item.get('status')} ({item.get('reason')})")

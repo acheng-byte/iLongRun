@@ -50,6 +50,27 @@ def main() -> int:
         assert (run_dir / "plan.md").exists()
         assert (run_dir / "scheduler.json").exists()
         assert list(run_dir.glob("task-list-*.md"))
+
+        model_info_run = run(
+            str(ROOT / "model_policy_info.py"),
+            "--config", str(ROOT.parent / "config" / "model-policy.jsonc"),
+            "--subcommand", "run",
+            "--skill", "ilongrun",
+            "--json",
+        )
+        model_info_run_payload = json.loads(model_info_run.stdout)
+        assert model_info_run_payload["selected"] == "claude-sonnet-4.6"
+
+        model_info_coding = run(
+            str(ROOT / "model_policy_info.py"),
+            "--config", str(ROOT.parent / "config" / "model-policy.jsonc"),
+            "--subcommand", "coding",
+            "--skill", "ilongrun-coding",
+            "--json",
+        )
+        model_info_coding_payload = json.loads(model_info_coding.stdout)
+        assert model_info_coding_payload["selected"] == "claude-opus-4.6"
+
         coding_workspace = temp_root / "coding-workspace"
         coding_workspace.mkdir(parents=True, exist_ok=True)
         run(
@@ -101,7 +122,7 @@ def main() -> int:
             "--workspace", str(workspace),
             "--run-id", run_id,
             "--status", "complete",
-            "--headline", "should fail without GPT-5.4 review",
+            "--headline", "should fail without final audit review",
             "--local-verify",
             ok=False,
             env={"ILONGRUN_NOTIFICATIONS": "0"},
@@ -128,6 +149,55 @@ def main() -> int:
         final_scheduler = read_json(run_dir / "scheduler.json")
         assert final_scheduler.get("state") == "complete"
         assert (run_dir / "COMPLETION.md").exists()
+
+        drift_workspace = temp_root / "drift-workspace"
+        drift_workspace.mkdir(parents=True, exist_ok=True)
+        run(
+            str(ROOT / "prepare_ilongrun_run.py"),
+            "--workspace", str(drift_workspace),
+            "--task", "实现账户服务并补测试，最终生成审查报告",
+            "--force-profile", "coding",
+        )
+        drift_run_id = (drift_workspace / ".copilot-ilongrun" / "state" / "latest-run-id").read_text(encoding="utf-8").strip()
+        drift_canonical = drift_workspace / ".copilot-ilongrun" / "runs" / drift_run_id
+        drift_legacy = drift_workspace / ".copilot-ilongrun" / drift_run_id
+        drift_legacy.mkdir(parents=True, exist_ok=True)
+        drift_scheduler = read_json(drift_canonical / "scheduler.json")
+        for ws in drift_scheduler.get("workstreams") or []:
+            ws["status"] = "complete"
+            ws_dir = drift_legacy / Path(ws["statusPath"]).parent
+            ws_dir.mkdir(parents=True, exist_ok=True)
+            (drift_legacy / ws["statusPath"]).write_text(json.dumps({"id": ws["id"], "status": "complete"}, ensure_ascii=False, indent=2), encoding="utf-8")
+            (drift_legacy / ws["resultPath"]).write_text("# Result\n\nLegacy execution finished.\n", encoding="utf-8")
+            (drift_legacy / ws["evidencePath"]).write_text("# Evidence\n\nLegacy evidence finished.\n", encoding="utf-8")
+        drift_scheduler["updatedAt"] = "2026-04-07T00:53:00Z"
+        drift_scheduler["selectedModel"] = "claude-opus-4.6"
+        (drift_legacy / "scheduler.json").write_text(json.dumps(drift_scheduler, ensure_ascii=False, indent=2), encoding="utf-8")
+        (drift_legacy / "reviews").mkdir(parents=True, exist_ok=True)
+        (drift_legacy / "reviews" / "gpt54-final-review.md").write_text("# Final Review\n\n## Must-fix\n- None\n", encoding="utf-8")
+        run(str(ROOT / "reconcile_ilongrun_run.py"), "--workspace", str(drift_workspace), "--run-id", drift_run_id)
+        assert not drift_legacy.exists()
+        assert (drift_canonical / "reviews" / "gpt54-final-review.md").exists()
+        assert (drift_canonical / "workstreams" / "ws-001" / "result.md").read_text(encoding="utf-8").startswith("# Result")
+        merge_reports = list((drift_workspace / ".copilot-ilongrun" / "legacy-imports" / "run-merges").glob("*.json"))
+        assert merge_reports
+
+        legacy_plugin_workspace = temp_root / "legacy-plugin-workspace"
+        legacy_plugin_workspace.mkdir(parents=True, exist_ok=True)
+        legacy_root = legacy_plugin_workspace / ".copilot-mission-control"
+        (legacy_root / "global").mkdir(parents=True, exist_ok=True)
+        (legacy_root / "global" / "hook-events.jsonl").write_text("{\"event\":\"sessionStart\"}\n", encoding="utf-8")
+        cleanup = run(
+            str(ROOT / "cleanup_legacy_workspace.py"),
+            "--workspace", str(legacy_plugin_workspace),
+            "--print-json",
+        )
+        cleanup_payload = json.loads(cleanup.stdout)
+        assert cleanup_payload["removed"] is True
+        assert not legacy_root.exists()
+        assert cleanup_payload["archivePath"]
+        assert Path(cleanup_payload["archivePath"]).exists()
+
         print("ILongRun selftest passed")
         return 0
     finally:
