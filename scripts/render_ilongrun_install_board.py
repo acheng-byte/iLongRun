@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import unicodedata
 from pathlib import Path
 
 COMMANDS = [
@@ -16,11 +17,31 @@ COMMANDS = [
 ]
 
 
-def line(label: str, value: str, width: int = 50) -> str:
-    body = f"  {label:<10} {value}"
-    if len(body) > width:
-        body = body[: width - 1] + "…"
-    return f"│{body:<{width}}│"
+def display_width(text: str) -> int:
+    total = 0
+    for char in text:
+        if char in {"️", "︎"}:
+            continue
+        if unicodedata.combining(char):
+            continue
+        if unicodedata.east_asian_width(char) in {"F", "W"}:
+            total += 2
+        elif unicodedata.category(char) == "So":
+            total += 2
+        else:
+            total += 1
+    return total
+
+
+def pad_display(text: str, width: int) -> str:
+    current = display_width(text)
+    if current >= width:
+        return text
+    return text + (" " * (width - current))
+
+
+def line(label: str, value: str, label_width: int = 14) -> str:
+    return f"│  {pad_display(label, label_width)} {value}"
 
 
 def resolve_installed_command(bin_dir: str, name: str) -> str:
@@ -115,16 +136,16 @@ def main() -> int:
     command_ready = installed_count == len(COMMANDS)
     path_ready = args.command_bin_dir in os.environ.get("PATH", "").split(":")
 
-    print("╭─── 🛠️ iLongRun 安装看板 ────────────────────────────╮")
-    print("│                                                    │")
+    print("╭─── 🛠️ iLongRun 安装看板 ────────────────────────────")
+    print("│")
     print(line("📦 安装状态", install_status_label(args.plugin_status, args.doctor_exit_code, command_ready)))
     print(line("🧹 清理策略", "先彻底清理，再安装新版"))
     print(line("🔌 插件注册", plugin_status_label(args.plugin_status, args.plugin_source)))
     print(line("🧩 本地能力", "✅ skills / agents / helpers 已就绪"))
     print(line("🚀 命令入口", f"✅ {installed_count}/{len(COMMANDS)} 个命令可直接使用"))
     print(line("🛡️ 环境自检", doctor_status_label(args.doctor_exit_code, doctor_info)))
-    print("│                                                    │")
-    print("╰────────────────────────────────────────────────────╯")
+    print("│")
+    print("╰────────────────────────────────────────────────────")
     print("")
 
     print("📁 安装位置")
@@ -191,7 +212,7 @@ def main() -> int:
         print("✅ 安装已经完成，但还有少量环境提醒；按上面的引导先跑 `ilongrun-doctor` 看详情即可。")
     else:
         print("⚠️ 安装已执行，但仍有命令未就绪；建议先执行 `ilongrun-doctor` 排查。")
-    print("欢迎加入zscc.in 知识船仓·公益社区 - 这里是终身学习者的后花园")
+    print("iLongRun - 由 zscc.in 知识船仓·公益社区 倾力之作，欢迎加入我们，这里是终身学习者的后花园")
     return 0
 
 
