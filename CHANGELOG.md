@@ -1,5 +1,19 @@
 # 更新日志
 
+## v0.2.1
+
+状态看板中文化升级：聚焦 `ilongrun-status` 的终端呈现体验，让默认输出从“英文结构化看板”升级为“中文结构化看板”。
+
+### 优化
+- **`ilongrun-status` 技能**：新增“默认中文输出”总规则，要求 section 标题、字段标签、状态值、模式值、backend 标记统一中文化
+- **展示映射**：补齐 status / mode / profile / control mode / backend / verdict / 内置 phase 的中文展示映射
+- **示例输出**：将 office profile 示例完整改写为中文状态看板，减少英文提示对用户体感的割裂
+- **终端文案**：明确禁止默认输出整块英文看板，必要时仅在中文后补充原始值
+
+### 文档
+- 新增 `docs/发版说明-v0.2.1.md`
+- README 文档索引补充 v0.2.1 发版说明
+
 ## v0.2.0
 
 深度编码纪律升级：整合 agent-skills 最佳实践，使 iLongRun 在 coding 任务场景下具备完整的编码执行纪律。
