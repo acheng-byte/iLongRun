@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Windows/Git Bash compatibility: fix Python stdout buffering
+export PYTHONUNBUFFERED=1
+export PYTHONIOENCODING=utf-8
+
 PLUGIN_NAME="ilongrun"
 PLUGIN_REPO_SLUG="izscc/iLongRun"
 DEFAULT_COPILOT_BIN="copilot"
@@ -90,7 +94,17 @@ helper_path() {
   return 1
 }
 
-copilot_path() { find_bin_from_common_locations "$COPILOT_BIN"; }
+copilot_path() {
+  # If COPILOT_BIN is already a full path (absolute or .exe), use it directly
+  if [[ "$COPILOT_BIN" == /* ]] || [[ "$COPILOT_BIN" == *.exe ]]; then
+    [ -x "$COPILOT_BIN" ] && { printf '%s\n' "$COPILOT_BIN"; return 0; }
+    return 1
+  fi
+  # Try Windows default install location (Git Bash path format)
+  local win_path="/c/Users/${USER}/AppData/Local/GitHub CLI/copilot/copilot.exe"
+  [ -x "$win_path" ] && { printf '%s\n' "$win_path"; return 0; }
+  find_bin_from_common_locations "$COPILOT_BIN"
+}
 screen_path() { find_bin_from_common_locations "$SCREEN_BIN"; }
 terminal_notifier_path() { find_bin_from_common_locations terminal-notifier; }
 
