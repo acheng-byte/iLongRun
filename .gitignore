@@ -5,3 +5,5 @@ __pycache__/
 .codex/
 docs/复盘报告-vibe-arena-20260407.md
 docs/ilongrun+superpowers.md
+docs/项目全局审计与整改说明.md
+docs/内部命名清理说明.md
