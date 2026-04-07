@@ -1,5 +1,36 @@
 # 更新日志
 
+## v0.7.0
+
+`ilongrun-coding` 正式升级为带 Superpowers 方法学强化层的 **Coding Discipline Kernel**：保留原有蜂群编排骨架，但把 workspace isolation、task microcycle、claim verification、root-cause recovery、skill engineering 全部写进协议与账本。
+
+### 新增
+- **方法学真值**：`config/coding-protocol.jsonc` 新增 `methodologyOverlay / workspaceIsolationPolicy / taskMicrocycle / claimVerificationPolicy / debugPolicy / skillEngineeringPolicy`
+- **scheduler 新字段**：`workspaceIsolation / phaseGuards / claimVerification`
+- **workstream 新字段**：`specRef / microcycleState / reviewSequence / freshEvidence / rootCauseRecord`
+- **新 playbooks**：`workspace-isolation.md / task-microcycle.md / claim-verification.md / recovery-debug.md / skill-engineering.md`
+- **skill lint**：新增 `scripts/lint_ilongrun_skills.py`
+- **pressure-scenario 参考资料**：新增 `references/skill-engineering-checklist.md` 与 `references/skill-pressure-scenarios.md`
+- **Superpowers 研究文档**：新增 `docs/ilongrun+superpowers.md`
+
+### 重构
+- **coding 协议升级为 Discipline Kernel**：从“有 review gate 的 coding swarm”升级为“蜂群编排 + 方法学硬门禁”
+- **status / doctor / install 链路同步升级**：看板与体检现在识别 methodology overlay、workspace isolation、claim verification、skill lint bundle
+- **skill frontmatter 重写**：`ilongrun / ilongrun-coding / ilongrun-resume / ilongrun-status` 的 description 统一改为 `Use when...` 风格
+- **launch / finalize / verify 更严格**：build 之外不考虑 fleet；finalize 缺 fresh evidence 时阻断；failed/blocked 缺 root cause record 时阻断
+
+### 增强
+- **workspace isolation assessment**：build 前自动评估 git/worktree/branch/in-place 策略；非 git 工作区允许 `skipped` 但必须记录原因
+- **task microcycle 硬化**：`spec-lock → red → verify-red → green → verify-green → self-review → spec-review → quality-review → handoff`
+- **claim verification 硬化**：fresh evidence 进入 finalize 前硬门禁
+- **recovery 更科学**：先写根因记录，再允许 minimal fix
+- **status 看板新增方法学门禁区**：明确显示 reviewSequence 未收敛、fresh evidence 缺失、rootCauseRecord 缺失等状态
+- **selftest 扩展**：增加 skill lint 的 fail→fix 场景，并覆盖 0.7.0 protocol 字段与 methodology bundle
+
+### 兼容策略
+- **新协议优先**：新的 coding run 以 `0.7.0` 为唯一标准
+- **旧 run best-effort**：旧 `v0.6.0` run 允许只读 reconcile 与最小字段推断，但若缺新 gate 所需证据，仍会被明确阻断
+
 ## v0.6.0
 
 `ilongrun-coding` 正式升级为可长跑、可恢复、可审计的 **Coding Swarm Protocol**：把 coding mission 从“统一纪律文案”重构为“协议真值 + phase playbooks + review gates + vendorized agent-skills 方法库”的完整执行内核。

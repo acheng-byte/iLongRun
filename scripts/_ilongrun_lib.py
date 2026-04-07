@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -84,14 +85,87 @@ def load_model_config(path: str | Path | None = None) -> dict[str, Any]:
 
 def default_coding_protocol() -> dict[str, Any]:
     return {
-        "version": "0.6.0",
-        "name": "iLongRun Coding Swarm Protocol",
+        "version": "0.7.0",
+        "name": "iLongRun Coding Discipline Kernel",
+        "sourceSnapshot": {
+            "repository": "https://github.com/addyosmani/agent-skills",
+            "commit": "1068b1b498f3223a08242402217fec4efc35dcb8",
+            "snapshotDate": "2026-04-07",
+            "license": "MIT",
+        },
+        "methodologyOverlay": {
+            "name": "superpowers-inspired-coding-discipline",
+            "strategy": "selective-deep-adaptation",
+            "repository": "https://github.com/obra/superpowers",
+            "scope": "coding-only",
+            "nonGoals": [
+                "replace ilongrun scheduler truth",
+                "vendorize superpowers runtime",
+                "add new public CLI entrypoints",
+            ],
+        },
+        "sourceSkills": [
+            "using-agent-skills",
+            "spec-driven-development",
+            "planning-and-task-breakdown",
+            "context-engineering",
+            "incremental-implementation",
+            "test-driven-development",
+            "debugging-and-error-recovery",
+            "code-review-and-quality",
+            "security-and-hardening",
+            "performance-optimization",
+            "documentation-and-adrs",
+            "git-workflow-and-versioning",
+            "shipping-and-launch",
+        ],
         "swarmPolicies": {
             "defaultMode": "swarm-wave",
             "allowedModes": ["serial", "swarm-wave", "super-swarm"],
             "maxParallelWorkstreams": 4,
             "maxFleetParallelWorkstreams": 8,
             "internalOnlyPhases": ["phase-review", "phase-audit", "phase-finalize"],
+            "internalOnlyWorkKinds": ["review", "audit", "release", "git", "finalize"],
+        },
+        "workspaceIsolationPolicy": {
+            "enabled": True,
+            "allowSkip": True,
+            "preferredStrategy": ["git-worktree", "feature-branch", "in-place"],
+            "requireBaselineCheck": True,
+            "requiredBeforeBuild": True,
+        },
+        "taskMicrocycle": {
+            "enabled": True,
+            "requiredForPhases": ["phase-build"],
+            "steps": [
+                "spec-lock",
+                "red",
+                "verify-red",
+                "green",
+                "verify-green",
+                "self-review",
+                "spec-review",
+                "quality-review",
+                "handoff",
+            ],
+        },
+        "claimVerificationPolicy": {
+            "requireFreshEvidence": True,
+            "requiredBeforeFinalize": True,
+            "minimumFields": ["command", "observedAt", "exitCode", "summary"],
+            "evidenceTTL": "same-session-or-explicit-rerun",
+        },
+        "debugPolicy": {
+            "requireRootCauseRecordBeforeFix": True,
+            "maxBlindFixAttempts": 0,
+            "minimumFields": ["symptom", "hypothesis", "evidence", "fix", "guard"],
+        },
+        "skillEngineeringPolicy": {
+            "frontmatterStyle": "trigger-first",
+            "requireSkillTests": True,
+            "enforceTokenBudget": True,
+            "requireCrossReferences": True,
+            "highFrequencySkillWordBudget": 900,
         },
         "phaseDefinitions": [
             {"id": "phase-define", "title": "Define", "taskList": True, "defaultWave": "wave-define-1"},
@@ -121,6 +195,7 @@ def default_coding_protocol() -> dict[str, Any]:
             "requiredFields": [
                 "goal", "inputs", "outputs", "ownerRole", "ownerModel", "swarmMode", "writeSet",
                 "handoffArtifacts", "entryCriteria", "exitCriteria", "acceptance", "verify", "retryBudget", "status",
+                "specRef", "microcycleState", "reviewSequence", "freshEvidence", "rootCauseRecord",
             ]
         },
         "releasePolicy": {
@@ -128,34 +203,441 @@ def default_coding_protocol() -> dict[str, Any]:
             "blockOnMissingReviewArtifacts": True,
             "blockOnMissingAudit": True,
             "blockOnFailedVerification": True,
+            "blockOnMissingFreshEvidence": True,
+            "blockOnMissingRootCauseRecord": True,
+            "blockOnIncompleteReviewSequence": True,
         },
     }
+
+
+def parse_semver_tuple(value: str | None) -> tuple[int, int, int]:
+    raw = str(value or "0.0.0").strip()
+    parts = [int(item) for item in re.findall(r"\d+", raw)[:3]]
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+
+def protocol_version_is_legacy(value: str | None, *, current: str | None = None) -> bool:
+    target = current or str(default_coding_protocol().get("version") or "0.7.0")
+    return parse_semver_tuple(value) < parse_semver_tuple(target)
+
+
+def task_microcycle_steps(protocol: dict[str, Any] | None = None) -> list[str]:
+    cfg = protocol or load_coding_protocol()
+    return [str(item) for item in (cfg.get("taskMicrocycle") or {}).get("steps") or [] if str(item).strip()]
+
+
+def default_microcycle_state(profile: str, phase_id: str, protocol: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = protocol or load_coding_protocol()
+    required = profile == "coding" and phase_id in set(str(item) for item in (cfg.get("taskMicrocycle") or {}).get("requiredForPhases") or [])
+    steps = task_microcycle_steps(cfg)
+    return {
+        "required": required,
+        "status": "pending" if required else "not-required",
+        "currentStep": steps[0] if required and steps else None,
+        "steps": [{"id": step, "status": "pending"} for step in steps],
+        "lastUpdatedAt": None,
+    }
+
+
+def normalize_microcycle_state(raw: Any, profile: str, phase_id: str, protocol: dict[str, Any] | None = None) -> dict[str, Any]:
+    default = default_microcycle_state(profile, phase_id, protocol)
+    if not isinstance(raw, dict):
+        return default
+    steps = []
+    raw_map = {str(item.get("id") or ""): str(item.get("status") or "pending") for item in raw.get("steps") or [] if isinstance(item, dict)}
+    for item in default["steps"]:
+        steps.append({"id": item["id"], "status": raw_map.get(item["id"], item["status"])})
+    return {
+        "required": bool(raw.get("required", default["required"])),
+        "status": str(raw.get("status") or default["status"]),
+        "currentStep": raw.get("currentStep") or default.get("currentStep"),
+        "steps": steps,
+        "lastUpdatedAt": raw.get("lastUpdatedAt"),
+    }
+
+
+def microcycle_is_complete(raw: Any) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    if not raw.get("required"):
+        return True
+    steps = raw.get("steps") or []
+    return bool(steps) and all(str(item.get("status") or "").lower() == "done" for item in steps if isinstance(item, dict))
+
+
+def microcycle_sequence_issues(raw: Any) -> list[str]:
+    if not isinstance(raw, dict) or not raw.get("required"):
+        return []
+    issues: list[str] = []
+    steps = [item for item in raw.get("steps") or [] if isinstance(item, dict)]
+    seen_pending = False
+    first_pending = None
+    for item in steps:
+        step_id = str(item.get("id") or "")
+        status = str(item.get("status") or "pending").lower()
+        done_like = status in {"done", "complete"}
+        if not done_like and first_pending is None:
+            first_pending = step_id
+        if seen_pending and done_like:
+            issues.append(f"out-of-order:{step_id}")
+        if not done_like:
+            seen_pending = True
+    current_step = str(raw.get("currentStep") or "").strip()
+    if first_pending and current_step and current_step != first_pending:
+        issues.append(f"current-step-mismatch:{current_step}->{first_pending}")
+    return issues
+
+
+def default_review_sequence(profile: str, phase_id: str) -> dict[str, Any]:
+    required = profile == "coding" and phase_id == "phase-build"
+    return {
+        "required": required,
+        "status": "pending" if required else "not-required",
+        "selfReview": "pending" if required else "not-required",
+        "specReview": "pending" if required else "not-required",
+        "qualityReview": "pending" if required else "not-required",
+        "lastUpdatedAt": None,
+    }
+
+
+def normalize_review_sequence(raw: Any, profile: str, phase_id: str) -> dict[str, Any]:
+    default = default_review_sequence(profile, phase_id)
+    if not isinstance(raw, dict):
+        return default
+    return {
+        "required": bool(raw.get("required", default["required"])),
+        "status": str(raw.get("status") or default["status"]),
+        "selfReview": str(raw.get("selfReview") or default["selfReview"]),
+        "specReview": str(raw.get("specReview") or default["specReview"]),
+        "qualityReview": str(raw.get("qualityReview") or default["qualityReview"]),
+        "lastUpdatedAt": raw.get("lastUpdatedAt"),
+    }
+
+
+def review_sequence_is_complete(raw: Any) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    if not raw.get("required"):
+        return True
+    return all(str(raw.get(key) or "").lower() == "complete" for key in ("selfReview", "specReview", "qualityReview"))
+
+
+def default_fresh_evidence(profile: str, phase_id: str) -> dict[str, Any]:
+    required = profile == "coding" and phase_id in {"phase-build", "phase-verify"}
+    return {
+        "required": required,
+        "status": "pending" if required else "not-required",
+        "items": [],
+        "lastUpdatedAt": None,
+    }
+
+
+def normalize_fresh_evidence(raw: Any, profile: str, phase_id: str) -> dict[str, Any]:
+    default = default_fresh_evidence(profile, phase_id)
+    if not isinstance(raw, dict):
+        return default
+    items = []
+    for item in raw.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        items.append({
+            "command": str(item.get("command") or "").strip(),
+            "observedAt": item.get("observedAt"),
+            "exitCode": item.get("exitCode"),
+            "summary": str(item.get("summary") or "").strip(),
+        })
+    return {
+        "required": bool(raw.get("required", default["required"])),
+        "status": str(raw.get("status") or default["status"]),
+        "items": items,
+        "lastUpdatedAt": raw.get("lastUpdatedAt"),
+    }
+
+
+def fresh_evidence_is_complete(raw: Any) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    if not raw.get("required"):
+        return True
+    items = raw.get("items") or []
+    if not items:
+        return False
+    for item in items:
+        if not isinstance(item, dict):
+            return False
+        if not str(item.get("command") or "").strip():
+            return False
+        if item.get("observedAt") in {None, ""}:
+            return False
+        if item.get("exitCode") is None:
+            return False
+        if not str(item.get("summary") or "").strip():
+            return False
+    return True
+
+
+def default_root_cause_record() -> dict[str, Any]:
+    return {
+        "required": False,
+        "status": "not-required",
+        "symptom": None,
+        "hypothesis": None,
+        "evidence": None,
+        "fix": None,
+        "guard": None,
+        "lastUpdatedAt": None,
+    }
+
+
+def normalize_root_cause_record(raw: Any) -> dict[str, Any]:
+    default = default_root_cause_record()
+    if not isinstance(raw, dict):
+        return default
+    return {
+        "required": bool(raw.get("required", default["required"])),
+        "status": str(raw.get("status") or default["status"]),
+        "symptom": raw.get("symptom"),
+        "hypothesis": raw.get("hypothesis"),
+        "evidence": raw.get("evidence"),
+        "fix": raw.get("fix"),
+        "guard": raw.get("guard"),
+        "lastUpdatedAt": raw.get("lastUpdatedAt"),
+    }
+
+
+def root_cause_record_is_complete(raw: Any) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    if not raw.get("required"):
+        return True
+    return all(str(raw.get(key) or "").strip() for key in ("symptom", "hypothesis", "evidence", "fix", "guard"))
+
+
+def default_workspace_isolation(protocol: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = protocol or load_coding_protocol()
+    policy = cfg.get("workspaceIsolationPolicy") or {}
+    return {
+        "enabled": bool(policy.get("enabled", True)),
+        "assessed": False,
+        "required": False,
+        "status": "pending",
+        "strategy": None,
+        "gitAvailable": None,
+        "isGitWorkspace": None,
+        "baselineStatus": "unknown",
+        "skippedReason": None,
+        "notes": [],
+        "lastAssessedAt": None,
+    }
+
+
+def normalize_workspace_isolation(raw: Any, protocol: dict[str, Any] | None = None) -> dict[str, Any]:
+    default = default_workspace_isolation(protocol)
+    if not isinstance(raw, dict):
+        return default
+    return {
+        "enabled": bool(raw.get("enabled", default["enabled"])),
+        "assessed": bool(raw.get("assessed", default["assessed"])),
+        "required": bool(raw.get("required", default["required"])),
+        "status": str(raw.get("status") or default["status"]),
+        "strategy": raw.get("strategy"),
+        "gitAvailable": raw.get("gitAvailable"),
+        "isGitWorkspace": raw.get("isGitWorkspace"),
+        "baselineStatus": str(raw.get("baselineStatus") or default["baselineStatus"]),
+        "skippedReason": raw.get("skippedReason"),
+        "notes": [str(item) for item in raw.get("notes") or [] if str(item).strip()],
+        "lastAssessedAt": raw.get("lastAssessedAt"),
+    }
+
+
+def default_phase_guards(protocol: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "workspaceIsolation": {"required": True, "status": "pending"},
+        "taskMicrocycle": {"required": True, "status": "pending"},
+        "claimVerification": {"required": True, "status": "pending"},
+        "rootCauseBeforeFix": {"required": True, "status": "pending"},
+    }
+
+
+def normalize_phase_guards(raw: Any, protocol: dict[str, Any] | None = None) -> dict[str, Any]:
+    default = default_phase_guards(protocol)
+    if not isinstance(raw, dict):
+        return default
+    normalized = copy.deepcopy(default)
+    for key in normalized:
+        payload = raw.get(key) if isinstance(raw.get(key), dict) else {}
+        normalized[key]["required"] = bool(payload.get("required", normalized[key]["required"]))
+        normalized[key]["status"] = str(payload.get("status") or normalized[key]["status"])
+    return normalized
+
+
+def default_claim_verification(protocol: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "required": True,
+        "status": "pending",
+        "requiredWorkstreams": [],
+        "missingWorkstreams": [],
+        "lastValidatedAt": None,
+        "summary": None,
+    }
+
+
+def normalize_claim_verification(raw: Any, protocol: dict[str, Any] | None = None) -> dict[str, Any]:
+    default = default_claim_verification(protocol)
+    if not isinstance(raw, dict):
+        return default
+    return {
+        "required": bool(raw.get("required", default["required"])),
+        "status": str(raw.get("status") or default["status"]),
+        "requiredWorkstreams": [str(item) for item in raw.get("requiredWorkstreams") or [] if str(item).strip()],
+        "missingWorkstreams": [str(item) for item in raw.get("missingWorkstreams") or [] if str(item).strip()],
+        "lastValidatedAt": raw.get("lastValidatedAt"),
+        "summary": raw.get("summary"),
+    }
+
+
+def claim_verification_is_complete(raw: Any) -> bool:
+    return isinstance(raw, dict) and str(raw.get("status") or "").lower() == "complete"
+
+
+def workstream_methodology_blockers(workstream: dict[str, Any]) -> list[str]:
+    blockers: list[str] = []
+    phase_id = str(workstream.get("phaseId") or "")
+    microcycle = workstream.get("microcycleState") or {}
+    review_sequence = workstream.get("reviewSequence") or {}
+    root_cause = workstream.get("rootCauseRecord") or {}
+    raw_status = str(workstream.get("status") or "").lower()
+    if phase_id == "phase-build" and raw_status in COMPLETE_WORKSTREAM_STATUSES:
+        if not microcycle_is_complete(microcycle):
+            blockers.append("task microcycle incomplete")
+        if not review_sequence_is_complete(review_sequence):
+            blockers.append("review sequence incomplete")
+    if raw_status in {"failed", "blocked"}:
+        if not root_cause_record_is_complete(root_cause):
+            blockers.append("root cause record missing")
+    return blockers
+
+
+def assess_workspace_isolation(target: RunTarget, scheduler: dict[str, Any], protocol: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = protocol or load_coding_protocol()
+    state = normalize_workspace_isolation(scheduler.get("workspaceIsolation"), cfg)
+    if scheduler.get("profile") != "coding":
+        state["enabled"] = False
+        state["status"] = "not-required"
+        state["assessed"] = True
+        return state
+    if not state.get("enabled", True):
+        state["status"] = "not-required"
+        state["assessed"] = True
+        return state
+    git_bin = shutil.which("git")
+    if not git_bin:
+        state.update({
+            "assessed": True,
+            "required": False,
+            "status": "skipped",
+            "strategy": None,
+            "gitAvailable": False,
+            "isGitWorkspace": False,
+            "baselineStatus": "unknown",
+            "skippedReason": "git unavailable",
+            "lastAssessedAt": now_iso(),
+        })
+        return state
+    state["gitAvailable"] = True
+    inside = subprocess.run([git_bin, "-C", str(target.workspace), "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True, check=False)
+    if inside.returncode != 0 or inside.stdout.strip().lower() != "true":
+        state.update({
+            "assessed": True,
+            "required": False,
+            "status": "skipped",
+            "strategy": None,
+            "isGitWorkspace": False,
+            "baselineStatus": "unknown",
+            "skippedReason": "non-git workspace",
+            "lastAssessedAt": now_iso(),
+        })
+        return state
+    dirty = subprocess.run([git_bin, "-C", str(target.workspace), "status", "--porcelain"], capture_output=True, text=True, check=False)
+    build_streams = [ws for ws in scheduler.get("workstreams") or [] if str(ws.get("phaseId") or "") == "phase-build"]
+    parallel_build = len(build_streams) > 1 or any(str(ws.get("swarmMode") or "") in {"swarm-wave", "super-swarm"} for ws in build_streams)
+    preferred = list((cfg.get("workspaceIsolationPolicy") or {}).get("preferredStrategy") or ["in-place"])
+    strategy = preferred[0] if parallel_build and preferred else (preferred[-1] if preferred else "in-place")
+    if not parallel_build and "in-place" in preferred:
+        strategy = "in-place"
+    notes = [str(item) for item in state.get("notes") or [] if str(item).strip()]
+    if dirty.stdout.strip():
+        note = "workspace baseline is dirty before build"
+        if note not in notes:
+            notes.append(note)
+    state.update({
+        "assessed": True,
+        "required": parallel_build,
+        "status": "ready",
+        "strategy": strategy,
+        "isGitWorkspace": True,
+        "baselineStatus": "dirty" if dirty.stdout.strip() else "clean",
+        "skippedReason": None,
+        "notes": notes,
+        "lastAssessedAt": now_iso(),
+    })
+    return state
 
 
 def resolve_coding_protocol_path(path: str | Path | None = None) -> Path:
     if path:
         return Path(path).expanduser()
-    if DEFAULT_CODING_PROTOCOL.exists():
-        return DEFAULT_CODING_PROTOCOL
     repo_default = REPO_ROOT / "config" / "coding-protocol.jsonc"
     if repo_default.exists():
         return repo_default
+    if DEFAULT_CODING_PROTOCOL.exists():
+        return DEFAULT_CODING_PROTOCOL
     return DEFAULT_CODING_PROTOCOL
 
 
 def load_coding_protocol(path: str | Path | None = None) -> dict[str, Any]:
     protocol_path = resolve_coding_protocol_path(path)
-    payload = read_jsonc(protocol_path, default_coding_protocol()) if protocol_path.suffix == ".jsonc" else read_json(protocol_path, default_coding_protocol())
-    merged = default_coding_protocol()
-    merged.update({k: v for k, v in payload.items() if k not in {"swarmPolicies", "reviewMatrix", "languageProfiles", "workstreamContract", "releasePolicy"}})
-    merged["swarmPolicies"] = shallow_merge(default_coding_protocol().get("swarmPolicies", {}), payload.get("swarmPolicies", {}))
-    merged["reviewMatrix"] = shallow_merge(default_coding_protocol().get("reviewMatrix", {}), payload.get("reviewMatrix", {}))
-    merged["languageProfiles"] = shallow_merge(default_coding_protocol().get("languageProfiles", {}), payload.get("languageProfiles", {}))
-    merged["workstreamContract"] = shallow_merge(default_coding_protocol().get("workstreamContract", {}), payload.get("workstreamContract", {}))
-    merged["releasePolicy"] = shallow_merge(default_coding_protocol().get("releasePolicy", {}), payload.get("releasePolicy", {}))
-    merged["phaseDefinitions"] = list(payload.get("phaseDefinitions") or default_coding_protocol().get("phaseDefinitions", []))
+    defaults = default_coding_protocol()
+    payload = read_jsonc(protocol_path, defaults) if protocol_path.suffix == ".jsonc" else read_json(protocol_path, defaults)
+    merged = copy.deepcopy(defaults)
+    merged.update(
+        {
+            k: v
+            for k, v in payload.items()
+            if k
+            not in {
+                "swarmPolicies",
+                "workspaceIsolationPolicy",
+                "taskMicrocycle",
+                "claimVerificationPolicy",
+                "debugPolicy",
+                "skillEngineeringPolicy",
+                "reviewMatrix",
+                "languageProfiles",
+                "workstreamContract",
+                "releasePolicy",
+            }
+        }
+    )
+    for key in (
+        "swarmPolicies",
+        "workspaceIsolationPolicy",
+        "taskMicrocycle",
+        "claimVerificationPolicy",
+        "debugPolicy",
+        "skillEngineeringPolicy",
+        "reviewMatrix",
+        "languageProfiles",
+        "workstreamContract",
+        "releasePolicy",
+    ):
+        merged[key] = shallow_merge(defaults.get(key, {}), payload.get(key, {}))
+    merged["phaseDefinitions"] = list(payload.get("phaseDefinitions") or defaults.get("phaseDefinitions", []))
     merged.setdefault("sourceSnapshot", payload.get("sourceSnapshot") or {})
     merged.setdefault("sourceSkills", payload.get("sourceSkills") or [])
+    merged.setdefault("methodologyOverlay", payload.get("methodologyOverlay") or defaults.get("methodologyOverlay") or {})
     return merged
 
 
@@ -919,6 +1401,7 @@ def make_workstream(
     inputs = list(inputs or [])
     write_set = list(write_set or [f"workstreams/{ws_id}"])
     resolved_swarm_mode = swarm_mode or ("serial" if dependencies else "swarm-wave")
+    protocol = load_coding_protocol() if profile == "coding" else {}
     acceptance = [
         f"目标达成：{short_label(goal, max_len=80)}",
         f"结果文件存在：`workstreams/{ws_id}/result.md`",
@@ -954,6 +1437,11 @@ def make_workstream(
         "verificationClass": verification_class or ("coding-review" if phase_id == "phase-review" else "coding-build"),
         "reviewRequired": review_required if review_required is not None else (profile == "coding" and phase_id in {"phase-build", "phase-verify", "phase-review"}),
         "skillPack": list(skill_pack or (["ilongrun-coding", phase_id] if profile == "coding" else ["ilongrun"])),
+        "specRef": f"{phase_id}:{ws_id}",
+        "microcycleState": default_microcycle_state(profile, phase_id, protocol),
+        "reviewSequence": default_review_sequence(profile, phase_id),
+        "freshEvidence": default_fresh_evidence(profile, phase_id),
+        "rootCauseRecord": default_root_cause_record(),
         "acceptance": acceptance,
         "verify": verify,
         "acceptanceChecklist": normalize_checklist_items([], acceptance, f"{ws_id}-acceptance"),
@@ -965,7 +1453,6 @@ def make_workstream(
         "notes": list(notes or []),
         "lastUpdatedAt": now_iso(),
     }
-
 
 def infer_initial_topology(prompt: str, profile: str, mode: str, config: dict[str, Any], requested_deliverables: list[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     role_map = role_models(config)
@@ -1353,6 +1840,11 @@ def normalize_workstream_records(payload: dict[str, Any]) -> None:
             "skillPack",
             ["ilongrun-coding", str(item.get("phaseId") or "unknown")] if payload.get("profile") == "coding" else ["ilongrun"],
         )
+        item.setdefault("specRef", f"{str(item.get('phaseId') or 'phase-unknown')}:{ws_id}")
+        item["microcycleState"] = normalize_microcycle_state(item.get("microcycleState"), str(payload.get("profile") or "office"), str(item.get("phaseId") or ""))
+        item["reviewSequence"] = normalize_review_sequence(item.get("reviewSequence"), str(payload.get("profile") or "office"), str(item.get("phaseId") or ""))
+        item["freshEvidence"] = normalize_fresh_evidence(item.get("freshEvidence"), str(payload.get("profile") or "office"), str(item.get("phaseId") or ""))
+        item["rootCauseRecord"] = normalize_root_cause_record(item.get("rootCauseRecord"))
         item.setdefault("notes", [])
         item["writeSet"] = [str(entry) for entry in item.get("writeSet") or [] if str(entry).strip()]
         item["handoffArtifacts"] = [str(entry) for entry in item.get("handoffArtifacts") or [] if str(entry).strip()]
@@ -1463,6 +1955,7 @@ def ensure_scheduler_defaults(scheduler: dict[str, Any] | None) -> dict[str, Any
                 "version": protocol.get("version"),
                 "path": str(resolve_coding_protocol_path()),
                 "sourceSnapshot": protocol.get("sourceSnapshot") or {},
+                "methodologyOverlay": protocol.get("methodologyOverlay") or {},
             },
         )
         payload["swarmPolicy"] = shallow_merge(
@@ -1472,11 +1965,17 @@ def ensure_scheduler_defaults(scheduler: dict[str, Any] | None) -> dict[str, Any
         payload["swarmPolicy"]["activeMode"] = payload.get("mode")
         payload["dependencyGraph"] = dependency_graph_from_workstreams(payload.get("workstreams") or [])
         payload["reviewMatrix"] = shallow_merge(protocol.get("reviewMatrix") or {}, payload.get("reviewMatrix") or {})
+        payload["workspaceIsolation"] = normalize_workspace_isolation(payload.get("workspaceIsolation"), protocol)
+        payload["phaseGuards"] = normalize_phase_guards(payload.get("phaseGuards"), protocol)
+        payload["claimVerification"] = normalize_claim_verification(payload.get("claimVerification"), protocol)
     else:
         payload.setdefault("codingProtocol", {})
         payload.setdefault("swarmPolicy", {})
         payload["dependencyGraph"] = dependency_graph_from_workstreams(payload.get("workstreams") or [])
         payload.setdefault("reviewMatrix", {})
+        payload.setdefault("workspaceIsolation", {})
+        payload.setdefault("phaseGuards", {})
+        payload.setdefault("claimVerification", {})
     mission = payload.get("mission") or {}
     mission.setdefault("goal", "")
     mission.setdefault("prompt", "")
@@ -1628,6 +2127,7 @@ def init_scheduler_payload(
                     "version": protocol.get("version"),
                     "path": str(resolve_coding_protocol_path()),
                     "sourceSnapshot": protocol.get("sourceSnapshot") or {},
+                    "methodologyOverlay": protocol.get("methodologyOverlay") or {},
                 }
                 if profile == "coding"
                 else {}
@@ -1738,6 +2238,11 @@ def sync_workstream_status_files(target: RunTarget, scheduler: dict[str, Any]) -
             "taskListPath": ws.get("taskListPath"),
             "resultPath": ws.get("resultPath"),
             "evidencePath": ws.get("evidencePath"),
+            "specRef": ws.get("specRef"),
+            "microcycleState": ws.get("microcycleState") or {},
+            "reviewSequence": ws.get("reviewSequence") or {},
+            "freshEvidence": ws.get("freshEvidence") or {},
+            "rootCauseRecord": ws.get("rootCauseRecord") or {},
             "acceptanceChecklist": acceptance_checklist,
             "verifyChecklist": verify_checklist,
             "projection": projection,
@@ -2057,6 +2562,13 @@ def build_task_list_markdown(target: RunTarget, scheduler: dict[str, Any], task_
         lines.extend(
             [
                 "",
+                "**Methodology**",
+                f"- Spec ref: `{ws.get('specRef') or 'n/a'}`",
+                f"- Microcycle: `{(ws.get('microcycleState') or {}).get('status') or 'n/a'}`",
+                f"- Review sequence: `{(ws.get('reviewSequence') or {}).get('status') or 'n/a'}`",
+                f"- Fresh evidence: `{(ws.get('freshEvidence') or {}).get('status') or 'n/a'}`",
+                f"- Root cause: `{(ws.get('rootCauseRecord') or {}).get('status') or 'n/a'}`",
+                "",
                 "**Paths**",
                 f"- Brief: `{ws.get('briefPath')}`",
                 f"- Result: `{'x' if projection['resultReady'] else ' '}` `{ws.get('resultPath')}`",
@@ -2119,6 +2631,26 @@ def build_workstream_brief_markdown(target: RunTarget, scheduler: dict[str, Any]
     lines.extend(f"- {item}" for item in ws.get("exitCriteria") or [])
     lines.extend(["", "**Skill Pack**"])
     lines.extend(f"- `{item}`" for item in ws.get("skillPack") or [])
+    lines.extend([
+        "",
+        "**Methodology Overlay**",
+        f"- Spec ref: `{ws.get('specRef') or 'n/a'}`",
+        f"- Microcycle status: `{(ws.get('microcycleState') or {}).get('status') or 'n/a'}`",
+    ])
+    microcycle_steps = (ws.get("microcycleState") or {}).get("steps") or []
+    if microcycle_steps:
+        lines.extend(f"  - [{ 'x' if str(item.get('status') or '').lower() in {'done','complete'} else ' ' }] {item.get('id')}" for item in microcycle_steps)
+    else:
+        lines.append("- Microcycle: not-required")
+    review_sequence = ws.get("reviewSequence") or {}
+    lines.extend([
+        f"- Review sequence: `{review_sequence.get('status') or 'n/a'}`",
+        f"  - self-review: `{review_sequence.get('selfReview') or 'n/a'}`",
+        f"  - spec-review: `{review_sequence.get('specReview') or 'n/a'}`",
+        f"  - quality-review: `{review_sequence.get('qualityReview') or 'n/a'}`",
+        f"- Fresh evidence: `{(ws.get('freshEvidence') or {}).get('status') or 'n/a'}`",
+        f"- Root cause record: `{(ws.get('rootCauseRecord') or {}).get('status') or 'n/a'}`",
+    ])
     return "\n".join(lines)
 
 
@@ -2327,6 +2859,8 @@ def runnable_fleet_waves(scheduler: dict[str, Any]) -> list[dict[str, Any]]:
         for wave in phase.get("waves") or []:
             if wave.get("backend") != "fleet":
                 continue
+            if str(phase.get("id") or "") != "phase-build":
+                continue
             ws_ids = wave.get("workstreams") or []
             if not ws_ids:
                 continue
@@ -2500,6 +3034,11 @@ def reconcile_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = No
     merge_legacy_run_dir(target)
     sched = ensure_scheduler_defaults(copy.deepcopy(scheduler or read_json(scheduler_path(target), {})))
     sched["state"] = normalize_run_state(sched.get("state"))
+    coding_protocol = load_coding_protocol() if sched.get("profile") == "coding" else {}
+    if sched.get("profile") == "coding":
+        sched["workspaceIsolation"] = assess_workspace_isolation(target, sched, coding_protocol)
+        sched["phaseGuards"] = normalize_phase_guards(sched.get("phaseGuards"), coding_protocol)
+        sched["claimVerification"] = normalize_claim_verification(sched.get("claimVerification"), coding_protocol)
     completed: list[str] = []
     active: list[str] = []
     for ws in sched.get("workstreams") or []:
@@ -2507,6 +3046,17 @@ def reconcile_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = No
         result_text = read_text(workstream_result_path(target, ws["id"]), "").strip()
         evidence_text = read_text(workstream_evidence_path(target, ws["id"]), "").strip()
         status = ws_state.get("status") or ws.get("status") or "pending"
+        if sched.get("profile") == "coding":
+            ws["specRef"] = str(ws_state.get("specRef") or ws.get("specRef") or f"{str(ws.get('phaseId') or 'phase-unknown')}:{ws['id']}")
+            ws["microcycleState"] = normalize_microcycle_state(ws_state.get("microcycleState") or ws.get("microcycleState"), str(sched.get("profile") or "office"), str(ws.get("phaseId") or ""), coding_protocol)
+            ws["reviewSequence"] = normalize_review_sequence(ws_state.get("reviewSequence") or ws.get("reviewSequence"), str(sched.get("profile") or "office"), str(ws.get("phaseId") or ""))
+            ws["freshEvidence"] = normalize_fresh_evidence(ws_state.get("freshEvidence") or ws.get("freshEvidence"), str(sched.get("profile") or "office"), str(ws.get("phaseId") or ""))
+            root_record = normalize_root_cause_record(ws_state.get("rootCauseRecord") or ws.get("rootCauseRecord"))
+            root_required = str(status or "").lower() in {"failed", "blocked"}
+            root_record["required"] = root_required or bool(root_record.get("required"))
+            if root_required and str(root_record.get("status") or "").lower() == "not-required":
+                root_record["status"] = "pending"
+            ws["rootCauseRecord"] = root_record
         projection = workstream_projection_state(target, {**ws, "status": status})
         acceptance_checklist = normalize_checklist_items(
             ws_state.get("acceptanceChecklist"),
@@ -2523,13 +3073,34 @@ def reconcile_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = No
                 if str(item.get("status") or "").lower() == "pending":
                     item["status"] = "done"
         normalized_status = str(status or "").lower()
+        if normalized_status not in COMPLETE_WORKSTREAM_STATUSES and result_text and evidence_text and result_text != f"# Result\n\nPending result for `{ws['id']}`." and evidence_text != f"# Evidence\n\nPending evidence for `{ws['id']}`.":
+            status = "complete"
+            normalized_status = "complete"
+        if sched.get("profile") == "coding":
+            microcycle = ws.get("microcycleState") or {}
+            review_sequence = ws.get("reviewSequence") or {}
+            fresh_evidence = ws.get("freshEvidence") or {}
+            root_record = ws.get("rootCauseRecord") or {}
+            microcycle["status"] = "complete" if microcycle_is_complete(microcycle) else ("pending" if microcycle.get("required") else "not-required")
+            review_sequence["status"] = "complete" if review_sequence_is_complete(review_sequence) else ("pending" if review_sequence.get("required") else "not-required")
+            fresh_evidence["status"] = "complete" if fresh_evidence_is_complete(fresh_evidence) else ("pending" if fresh_evidence.get("required") else "not-required")
+            root_record["status"] = "complete" if root_cause_record_is_complete(root_record) else ("pending" if root_record.get("required") else "not-required")
+            ws["microcycleState"] = microcycle
+            ws["reviewSequence"] = review_sequence
+            ws["freshEvidence"] = fresh_evidence
+            ws["rootCauseRecord"] = root_record
+            blockers = workstream_methodology_blockers({**ws, "status": status})
+            ws["methodologyBlockers"] = blockers
+            if blockers and normalized_status in COMPLETE_WORKSTREAM_STATUSES:
+                status = "blocked"
+                normalized_status = "blocked"
+            elif blockers and normalized_status in {"failed", "blocked"}:
+                status = "blocked"
+                normalized_status = "blocked"
         if normalized_status in COMPLETE_WORKSTREAM_STATUSES:
             completed.append(ws["id"])
         elif normalized_status in ACTIVE_WORKSTREAM_STATUSES:
             active.append(ws["id"])
-        elif result_text and evidence_text and result_text != f"# Result\n\nPending result for `{ws['id']}`." and evidence_text != f"# Evidence\n\nPending evidence for `{ws['id']}`.":
-            status = "complete"
-            completed.append(ws["id"])
         ws["status"] = status
         ws["acceptanceChecklist"] = acceptance_checklist
         ws["verifyChecklist"] = verify_checklist
@@ -2562,6 +3133,60 @@ def reconcile_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = No
 
     if sched.get("profile") == "coding":
         protocol = load_coding_protocol()
+        workspace_state = normalize_workspace_isolation(sched.get("workspaceIsolation"), protocol)
+        build_streams = [ws for ws in sched.get("workstreams") or [] if str(ws.get("phaseId") or "") == "phase-build"]
+        evidence_streams = [
+            ws for ws in sched.get("workstreams") or []
+            if ws.get("required")
+            and str(ws.get("phaseId") or "") in {"phase-build", "phase-verify"}
+            and (ws.get("freshEvidence") or {}).get("required")
+        ]
+        claim_verification = normalize_claim_verification(sched.get("claimVerification"), protocol)
+        claim_verification["requiredWorkstreams"] = [str(ws.get("id") or "") for ws in evidence_streams if str(ws.get("id") or "").strip()]
+        claim_verification["missingWorkstreams"] = [
+            str(ws.get("id") or "") for ws in evidence_streams
+            if not fresh_evidence_is_complete(ws.get("freshEvidence") or {})
+        ]
+        if not claim_verification.get("required"):
+            claim_verification["status"] = "not-required"
+        elif not claim_verification["requiredWorkstreams"]:
+            claim_verification["status"] = "pending"
+        elif claim_verification["missingWorkstreams"]:
+            claim_verification["status"] = "pending"
+        else:
+            claim_verification["status"] = "complete"
+        claim_verification["summary"] = (
+            f"fresh evidence {len(claim_verification['requiredWorkstreams']) - len(claim_verification['missingWorkstreams'])}/{len(claim_verification['requiredWorkstreams'])}"
+            if claim_verification.get("requiredWorkstreams")
+            else "fresh evidence pending"
+        )
+        claim_verification["lastValidatedAt"] = now_iso()
+        sched["claimVerification"] = claim_verification
+
+        phase_guards = normalize_phase_guards(sched.get("phaseGuards"), protocol)
+        if not workspace_state.get("enabled"):
+            phase_guards["workspaceIsolation"]["status"] = "not-required"
+        elif workspace_state.get("assessed") and str(workspace_state.get("status") or "") in {"ready", "skipped", "not-required"}:
+            phase_guards["workspaceIsolation"]["status"] = "complete"
+        else:
+            phase_guards["workspaceIsolation"]["status"] = "pending"
+        if build_streams:
+            phase_guards["taskMicrocycle"]["status"] = "complete" if all(
+                microcycle_is_complete(ws.get("microcycleState") or {}) and review_sequence_is_complete(ws.get("reviewSequence") or {})
+                for ws in build_streams if (ws.get("microcycleState") or {}).get("required") or (ws.get("reviewSequence") or {}).get("required")
+            ) else "pending"
+        else:
+            phase_guards["taskMicrocycle"]["status"] = "not-required"
+        blocked_or_failed = [ws for ws in sched.get("workstreams") or [] if str(ws.get("status") or "").lower() in {"blocked", "failed"}]
+        if not blocked_or_failed:
+            phase_guards["rootCauseBeforeFix"]["status"] = "not-required"
+        elif all(root_cause_record_is_complete(ws.get("rootCauseRecord") or {}) for ws in blocked_or_failed):
+            phase_guards["rootCauseBeforeFix"]["status"] = "complete"
+        else:
+            phase_guards["rootCauseBeforeFix"]["status"] = "blocked"
+        phase_guards["claimVerification"]["status"] = "complete" if claim_verification_is_complete(claim_verification) else "pending"
+        sched["phaseGuards"] = phase_guards
+
         review_gate_status: dict[str, str] = {}
         for gate in (protocol.get("reviewMatrix") or {}).get("gates") or []:
             gate_id = str(gate.get("id") or "")
@@ -2617,7 +3242,7 @@ def reconcile_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = No
             if is_run_complete_state(sched.get("state")) and completion_path(target).exists():
                 finalize_phase["status"] = "complete"
             elif audit_phase and audit_phase.get("status") == "complete":
-                finalize_phase["status"] = "running"
+                finalize_phase["status"] = "running" if claim_verification_is_complete(claim_verification) else "blocked"
             else:
                 finalize_phase["status"] = "pending"
             for wave in finalize_phase.get("waves") or []:
@@ -2691,6 +3316,16 @@ def verify_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None,
     if plan_phase and str(plan_phase.group(1)).strip() != str(sched.get("phase") or "").strip():
         drift_findings.append(f"plan.md phase drift: {plan_phase.group(1)} != {sched.get('phase')}")
     workstreams = sched.get("workstreams") or []
+    if sched.get("profile") == "coding":
+        raw_protocol_version = str(((raw_scheduler.get("codingProtocol") or {}).get("version") or "")).strip()
+        if protocol_version_is_legacy(raw_protocol_version, current=str((load_coding_protocol().get("version") or "0.7.0"))):
+            soft_warnings.append(f"legacy coding protocol detected: {raw_protocol_version or 'unknown'}; 0.7.0 gates are running in best-effort migration mode")
+        if not isinstance(raw_scheduler.get("workspaceIsolation"), dict):
+            soft_warnings.append("scheduler workspaceIsolation was inferred for 0.7.0 compatibility")
+        if not isinstance(raw_scheduler.get("phaseGuards"), dict):
+            soft_warnings.append("scheduler phaseGuards were inferred for 0.7.0 compatibility")
+        if not isinstance(raw_scheduler.get("claimVerification"), dict):
+            soft_warnings.append("scheduler claimVerification was inferred for 0.7.0 compatibility")
     if not workstreams:
         hard_failures.append("scheduler has no workstreams")
     if not (sched.get("taskLists") or []):
@@ -2726,6 +3361,28 @@ def verify_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None,
         projection = workstream_projection_state(target, ws)
         if projection["drift"]:
             drift_findings.append(f"workstream claims complete without full evidence: {ws['id']}")
+        if sched.get("profile") == "coding":
+            microcycle = normalize_microcycle_state(ws.get("microcycleState"), str(sched.get("profile") or "office"), str(ws.get("phaseId") or ""), load_coding_protocol())
+            review_sequence = normalize_review_sequence(ws.get("reviewSequence"), str(sched.get("profile") or "office"), str(ws.get("phaseId") or ""))
+            fresh_evidence = normalize_fresh_evidence(ws.get("freshEvidence"), str(sched.get("profile") or "office"), str(ws.get("phaseId") or ""))
+            root_cause = normalize_root_cause_record(ws.get("rootCauseRecord"))
+            ws_status = str(ws.get("status") or "").lower()
+            for item in fresh_evidence.get("items") or []:
+                observed_at = item.get("observedAt")
+                if observed_at and parse_iso(str(observed_at)) is None:
+                    drift_findings.append(f"fresh evidence observedAt invalid: {ws['id']} -> {observed_at}")
+            if str(ws.get("phaseId") or "") == "phase-build":
+                sequence_issues = microcycle_sequence_issues(microcycle)
+                if sequence_issues:
+                    hard_failures.append(f"build workstream microcycle sequence invalid: {ws['id']} -> {', '.join(sequence_issues)}")
+                if ws_status in COMPLETE_WORKSTREAM_STATUSES and not microcycle_is_complete(microcycle):
+                    hard_failures.append(f"build workstream complete without full microcycle: {ws['id']}")
+                if ws_status in COMPLETE_WORKSTREAM_STATUSES and not review_sequence_is_complete(review_sequence):
+                    hard_failures.append(f"build workstream complete without reviewSequence: {ws['id']}")
+            if ws_status in {"failed", "blocked"} and not root_cause_record_is_complete(root_cause):
+                hard_failures.append(f"recovery blocked: rootCauseRecord missing: {ws['id']}")
+            if finalize_candidate and ws.get("required") and (fresh_evidence.get("required") and not fresh_evidence_is_complete(fresh_evidence)):
+                hard_failures.append(f"finalize blocked: freshEvidence missing: {ws['id']}")
     deliverables = [str(item) for item in sched.get("deliverables") or [] if item]
     existing_deliverables: list[str] = []
     for item in deliverables:
@@ -2783,6 +3440,20 @@ def verify_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None,
         if is_run_complete_state(sched.get("state")) and known_wave_ids and fleet_wave_ids(sched) and not (dispatch_events or dispatch.get("completedWaves") or dispatch.get("degradedWaves")):
             soft_warnings.append("fleet-involved run completed without any fleet dispatch evidence")
     if sched.get("profile") == "coding":
+        workspace_isolation = normalize_workspace_isolation(sched.get("workspaceIsolation"), load_coding_protocol())
+        phase_guards = normalize_phase_guards(sched.get("phaseGuards"), load_coding_protocol())
+        claim_verification = normalize_claim_verification(sched.get("claimVerification"), load_coding_protocol())
+        if workspace_isolation.get("enabled") and not workspace_isolation.get("assessed"):
+            hard_failures.append("workspace isolation assessment missing")
+        elif workspace_isolation.get("enabled") and str(workspace_isolation.get("status") or "") not in {"ready", "skipped", "not-required"}:
+            hard_failures.append(f"workspace isolation not ready: {workspace_isolation.get('status') or 'unknown'}")
+        if str((phase_guards.get("taskMicrocycle") or {}).get("status") or "") not in {"complete", "not-required"}:
+            soft_warnings.append("phase guard taskMicrocycle is not converged yet")
+        if str((phase_guards.get("rootCauseBeforeFix") or {}).get("status") or "") == "blocked":
+            hard_failures.append("phase guard rootCauseBeforeFix is blocked")
+        if finalize_candidate and not claim_verification_is_complete(claim_verification):
+            missing = ", ".join(claim_verification.get("missingWorkstreams") or []) or "unknown"
+            hard_failures.append(f"finalize blocked: claimVerification incomplete ({missing})")
         delivery_audit = scan_workspace_delivery_gaps(target.workspace)
         write_text_atomic(delivery_audit_path(target), render_delivery_audit_markdown(delivery_audit))
         high_confidence = [item for item in delivery_audit.get("findings") or [] if item.get("severity") == "high"]

@@ -25,9 +25,14 @@ from _ilongrun_lib import (  # noqa: E402
     projection_log_path,
     read_json,
     read_text,
+    reconcile_scheduler,
     resolve_run_target,
     scheduler_uses_fleet_runtime,
     scheduler_path,
+    review_sequence_is_complete,
+    microcycle_is_complete,
+    root_cause_record_is_complete,
+    claim_verification_is_complete,
 )
 from _ilongrun_delivery_audit import scan_workspace_delivery_gaps  # noqa: E402
 from _ilongrun_shared import display_model_name, parse_iso  # noqa: E402
@@ -196,6 +201,26 @@ def compute_snapshot(sched: dict[str, Any], target) -> dict[str, Any]:
     delivery_audit_file = delivery_audit_path(target)
     delivery_audit_exists = delivery_audit_file.exists()
 
+    methodology: dict[str, Any] = {}
+    if str(sched.get("profile") or "") == "coding":
+        build_workstreams = [ws for ws in workstreams if str(ws.get("phaseId") or "") == "phase-build"]
+        review_sequence_pending = [ws["id"] for ws in build_workstreams if (ws.get("reviewSequence") or {}).get("required") and not review_sequence_is_complete(ws.get("reviewSequence") or {})]
+        microcycle_pending = [ws["id"] for ws in build_workstreams if (ws.get("microcycleState") or {}).get("required") and not microcycle_is_complete(ws.get("microcycleState") or {})]
+        root_cause_pending = [ws["id"] for ws in workstreams if str(ws.get("status") or "").lower() in {"blocked", "failed"} and not root_cause_record_is_complete(ws.get("rootCauseRecord") or {})]
+        claim = sched.get("claimVerification") or {}
+        workspace = sched.get("workspaceIsolation") or {}
+        guards = sched.get("phaseGuards") or {}
+        methodology = {
+            "overlay": (sched.get("codingProtocol") or {}).get("methodologyOverlay") or {},
+            "workspaceIsolation": workspace,
+            "phaseGuards": guards,
+            "claimVerification": claim,
+            "reviewSequencePending": review_sequence_pending,
+            "microcyclePending": microcycle_pending,
+            "rootCausePending": root_cause_pending,
+            "claimVerificationReady": claim_verification_is_complete(claim),
+        }
+
     risks = []
     for item in verification.get("hardFailures") or []:
         risks.append(f"硬失败：{item}")
@@ -207,6 +232,23 @@ def compute_snapshot(sched: dict[str, Any], target) -> dict[str, Any]:
         risks.append("active-run-id 仍指向当前已完成/阻塞 run")
     if str(sched.get("state") or "").lower() in {"complete", "completed"} and not completion_exists:
         risks.append("scheduler 已完成但 COMPLETION.md 缺失")
+    if methodology:
+        workspace = methodology.get("workspaceIsolation") or {}
+        claim = methodology.get("claimVerification") or {}
+        if workspace.get("enabled") and not workspace.get("assessed"):
+            risks.append("workspace isolation 仍未评估")
+        elif workspace.get("enabled") and str(workspace.get("status") or "") not in {"ready", "skipped", "not-required"}:
+            risks.append(f"workspace isolation 未就绪：{workspace.get('status')}")
+        if methodology.get("reviewSequencePending"):
+            risks.append(f"build 已完成但 reviewSequence 未收敛：{', '.join(methodology['reviewSequencePending'][:4])}")
+        if methodology.get("microcyclePending"):
+            risks.append(f"build microcycle 未收敛：{', '.join(methodology['microcyclePending'][:4])}")
+        if methodology.get("rootCausePending"):
+            risks.append(f"recovery 缺 rootCauseRecord：{', '.join(methodology['rootCausePending'][:4])}")
+        if not methodology.get("claimVerificationReady"):
+            missing = claim.get("missingWorkstreams") or []
+            if missing:
+                risks.append(f"finalize 缺 fresh evidence：{', '.join(missing[:4])}")
 
     next_steps: list[str] = []
     if verification.get("recommendedAction"):
@@ -216,6 +258,16 @@ def compute_snapshot(sched: dict[str, Any], target) -> dict[str, Any]:
         next_steps.append("优先查看 `reviews/delivery-audit.md`，把未接主链模块真正接入入口链。")
     elif verdict == "implemented-not-validated":
         next_steps.append("优先补运行态验证与终审证据，避免只停留在静态通过。")
+    if methodology:
+        workspace = methodology.get("workspaceIsolation") or {}
+        if workspace.get("enabled") and not workspace.get("assessed"):
+            next_steps.append("先完成 workspace isolation assessment，再推进 build。")
+        elif methodology.get("reviewSequencePending"):
+            next_steps.append("先补 build workstream 的 self/spec/quality review sequence。")
+        elif methodology.get("rootCausePending"):
+            next_steps.append("先补 rootCauseRecord，再继续 recovery / resume。")
+        elif not methodology.get("claimVerificationReady"):
+            next_steps.append("先补 fresh evidence，再尝试 finalize。")
     if not review_exists and sched.get("profile") == "coding":
         next_steps.append("补齐 `reviews/gpt54-final-review.md`。")
     if not adjudication_exists and sched.get("profile") == "coding":
@@ -282,6 +334,7 @@ def compute_snapshot(sched: dict[str, Any], target) -> dict[str, Any]:
         "deliveryAuditExists": delivery_audit_exists,
         "deliveryAuditPath": str(delivery_audit_file),
         "completionScore": completion_score,
+        "methodology": methodology,
         "risks": risks,
         "nextSteps": next_steps[:4],
         "hasFleetWave": has_fleet_wave,
@@ -314,7 +367,7 @@ def main() -> int:
     args = parser.parse_args()
 
     target = resolve_run_target(args.workspace, args.run_id)
-    sched = ensure_scheduler_defaults(read_json(scheduler_path(target), {}))
+    sched = reconcile_scheduler(target)
     config = load_model_config(args.model_config)
     snapshot = compute_snapshot(sched, target)
     verification = sched.get("verification") or {}
@@ -393,14 +446,38 @@ def main() -> int:
     print("")
 
     if str(sched.get("profile") or "") == "coding":
+        methodology = snapshot.get("methodology") or {}
+        overlay = methodology.get("overlay") or {}
+        workspace_isolation = methodology.get("workspaceIsolation") or {}
+        phase_guards = methodology.get("phaseGuards") or {}
+        claim_verification = methodology.get("claimVerification") or {}
         print(section_heading("🐝 Coding Swarm Protocol"))
         print(section_rule())
         print(detail_line("协议版本", tone("soft", str(coding_protocol.get("version") or "无"))))
+        print(detail_line("方法学层", tone("soft", f"{overlay.get('name') or '无'} / {overlay.get('strategy') or 'n/a'}")))
         print(detail_line("当前 swarm", tone("soft", str(swarm_policy.get("activeMode") or sched.get("mode") or "无"))))
         print(detail_line("默认 swarm", tone("soft", str(swarm_policy.get("defaultMode") or "无"))))
         print(detail_line("并行上限", tone("soft", f"{swarm_policy.get('maxParallelWorkstreams') or 'n/a'} / fleet {swarm_policy.get('maxFleetParallelWorkstreams') or 'n/a'}")))
         dependency_graph = sched.get("dependencyGraph") or {}
         print(detail_line("依赖图", tone("soft", f"{len(dependency_graph.get('nodes') or [])} 节点 / {len(dependency_graph.get('edges') or [])} 边")))
+        print("")
+
+        print(section_heading("🧠 方法学门禁"))
+        print(section_rule())
+        print(detail_line("workspace isolation", tone_status(workspace_isolation.get("status"))))
+        print(detail_line("隔离策略", tone("soft", f"{workspace_isolation.get('strategy') or 'n/a'} / baseline={workspace_isolation.get('baselineStatus') or 'unknown'}")))
+        print(detail_line("taskMicrocycle", tone_status((phase_guards.get("taskMicrocycle") or {}).get("status"))))
+        print(detail_line("claimVerification", tone_status((phase_guards.get("claimVerification") or {}).get("status"))))
+        print(detail_line("rootCauseBeforeFix", tone_status((phase_guards.get("rootCauseBeforeFix") or {}).get("status"))))
+        print(detail_line("fresh evidence", tone_status(claim_verification.get("status"))))
+        missing_claims = ", ".join(claim_verification.get("missingWorkstreams") or []) or "无"
+        print(detail_line("缺失证据", tone("warn" if missing_claims != "无" else "soft", missing_claims)))
+        review_pending = ", ".join((methodology.get("reviewSequencePending") or [])[:4]) or "无"
+        micro_pending = ", ".join((methodology.get("microcyclePending") or [])[:4]) or "无"
+        root_pending = ", ".join((methodology.get("rootCausePending") or [])[:4]) or "无"
+        print(detail_line("reviewSequence 待收敛", tone("warn" if review_pending != "无" else "soft", review_pending)))
+        print(detail_line("microcycle 待收敛", tone("warn" if micro_pending != "无" else "soft", micro_pending)))
+        print(detail_line("rootCause 待补齐", tone("warn" if root_pending != "无" else "soft", root_pending)))
         print("")
 
         print(section_heading("🔒 质量门禁"))

@@ -219,6 +219,7 @@ helpers=(
   finalize_ilongrun_run.py
   launch_ilongrun_supervisor.py
   selftest_ilongrun.py
+  lint_ilongrun_skills.py
   sync_ilongrun_ledger.py
   model_policy_info.py
   probe_models.py

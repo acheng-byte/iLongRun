@@ -1,13 +1,24 @@
 {
-  // iLongRun v0.6.0 Coding Swarm Protocol
+  // iLongRun v0.7.0 Coding Discipline Kernel
   // 单一机器真值：供 skills / supervisor / status / doctor / selftest 共用
-  "version": "0.6.0",
-  "name": "iLongRun Coding Swarm Protocol",
+  "version": "0.7.0",
+  "name": "iLongRun Coding Discipline Kernel",
   "sourceSnapshot": {
     "repository": "https://github.com/addyosmani/agent-skills",
     "commit": "1068b1b498f3223a08242402217fec4efc35dcb8",
     "snapshotDate": "2026-04-07",
     "license": "MIT"
+  },
+  "methodologyOverlay": {
+    "name": "superpowers-inspired-coding-discipline",
+    "strategy": "selective-deep-adaptation",
+    "repository": "https://github.com/obra/superpowers",
+    "scope": "coding-only",
+    "nonGoals": [
+      "replace ilongrun scheduler truth",
+      "vendorize superpowers runtime",
+      "add new public CLI entrypoints"
+    ]
   },
   "sourceSkills": [
     "using-agent-skills",
@@ -45,34 +56,79 @@
       "security-sensitive manual checkpoint"
     ]
   },
+  "workspaceIsolationPolicy": {
+    "enabled": true,
+    "allowSkip": true,
+    "preferredStrategy": ["git-worktree", "feature-branch", "in-place"],
+    "requireBaselineCheck": true,
+    "requiredBeforeBuild": true,
+    "skipReasons": [
+      "non-git workspace",
+      "git unavailable",
+      "single-lane low-conflict task"
+    ]
+  },
+  "taskMicrocycle": {
+    "enabled": true,
+    "requiredForPhases": ["phase-build"],
+    "steps": [
+      "spec-lock",
+      "red",
+      "verify-red",
+      "green",
+      "verify-green",
+      "self-review",
+      "spec-review",
+      "quality-review",
+      "handoff"
+    ]
+  },
+  "claimVerificationPolicy": {
+    "requireFreshEvidence": true,
+    "requiredBeforeFinalize": true,
+    "minimumFields": ["command", "observedAt", "exitCode", "summary"],
+    "evidenceTTL": "same-session-or-explicit-rerun"
+  },
+  "debugPolicy": {
+    "requireRootCauseRecordBeforeFix": true,
+    "maxBlindFixAttempts": 0,
+    "minimumFields": ["symptom", "hypothesis", "evidence", "fix", "guard"]
+  },
+  "skillEngineeringPolicy": {
+    "frontmatterStyle": "trigger-first",
+    "requireSkillTests": true,
+    "enforceTokenBudget": true,
+    "requireCrossReferences": true,
+    "highFrequencySkillWordBudget": 900
+  },
   "phaseDefinitions": [
     {
       "id": "phase-define",
       "title": "Define",
       "taskList": true,
       "defaultWave": "wave-define-1",
-      "gates": ["assumptions surfaced", "goal / scope / constraints locked"]
+      "gates": ["assumptions surfaced", "goal / scope / constraints locked", "spec discipline applied"]
     },
     {
       "id": "phase-plan",
       "title": "Plan",
       "taskList": true,
       "defaultWave": "wave-plan-1",
-      "gates": ["dependency graph written", "task slices sized", "handoff contracts defined"]
+      "gates": ["dependency graph written", "task slices sized", "handoff contracts defined", "specRef bound"]
     },
     {
       "id": "phase-build",
       "title": "Build",
       "taskList": true,
       "defaultWave": "wave-build-foundation",
-      "gates": ["incremental implementation", "TDD evidence", "build slice verification"]
+      "gates": ["workspace isolation assessed", "task microcycle complete", "review sequence complete", "build slice verification"]
     },
     {
       "id": "phase-verify",
       "title": "Verify",
       "taskList": false,
       "defaultWave": "wave-verify-1",
-      "gates": ["tests", "build", "runtime / wiring evidence"]
+      "gates": ["tests", "build", "runtime / wiring evidence", "fresh evidence captured"]
     },
     {
       "id": "phase-review",
@@ -93,7 +149,7 @@
       "title": "Finalize",
       "taskList": false,
       "defaultWave": "wave-finalize-1",
-      "gates": ["completion report", "pointer cleanup", "release readiness"]
+      "gates": ["completion report", "claim verification", "pointer cleanup", "release readiness"]
     }
   ],
   "reviewMatrix": {
@@ -153,13 +209,21 @@
       "acceptance",
       "verify",
       "retryBudget",
-      "status"
+      "status",
+      "specRef",
+      "microcycleState",
+      "reviewSequence",
+      "freshEvidence",
+      "rootCauseRecord"
     ]
   },
   "releasePolicy": {
     "blockOnPendingMustFix": true,
     "blockOnMissingReviewArtifacts": true,
     "blockOnMissingAudit": true,
-    "blockOnFailedVerification": true
+    "blockOnFailedVerification": true,
+    "blockOnMissingFreshEvidence": true,
+    "blockOnMissingRootCauseRecord": true,
+    "blockOnIncompleteReviewSequence": true
   }
 }
