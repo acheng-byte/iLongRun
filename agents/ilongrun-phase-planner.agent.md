@@ -18,12 +18,14 @@ tools: ["view", "glob", "grep", "edit", "create", "bash", "task"]
 
 当 `profile=coding` 时，推荐的 phase 结构：
 
-```
-phase-strategy    → 策略合成（必须）
+```text
+phase-define      → 目标、边界、成功标准（必须）
+phase-plan        → 依赖图、wave、write set（必须）
 phase-build       → 编码实现（TDD + 增量）
-phase-verify      → 测试验证 + 代码审查
-phase-audit       → GPT-5.4 终审（必须）
-phase-finalize    → 收尾发布（必须）
+phase-verify      → 测试、构建、运行证据固定
+phase-review      → code / test-evidence / security gate
+phase-audit       → 最终终审与 adjudication（必须）
+phase-finalize    → 收尾与完成态输出（必须）
 ```
 
 ### 可选细分
@@ -32,7 +34,7 @@ phase-finalize    → 收尾发布（必须）
   - wave-foundation: 基础架构/接口定义
   - wave-implementation: 功能实现
   - wave-integration: 集成测试
-- `phase-verify` 可并行 review 和安全审计
+- `phase-review` 可并行 review gates，但 `phase-audit` 必须串行
 
 ## Wave 资格评估
 
@@ -44,3 +46,4 @@ phase-finalize    → 收尾发布（必须）
 | 涉及 Git 操作 | | ✅ |
 | 涉及发版 | | ✅ |
 | 涉及终审裁决 | | ✅ |
+| 用户显式锁定 `--model` | ✅（但必须全链路保持同一模型） | |

@@ -92,7 +92,7 @@ def main() -> int:
             )
         if not final_review_path(target).exists() and not args.force_complete:
             verification["ok"] = False
-            verification.setdefault("hardFailures", []).append("reviews/gpt54-final-review.md is missing")
+            verification.setdefault("hardFailures", []).append("reviews/final-review.md is missing")
         if not adjudication_path(target).exists() and not args.force_complete:
             verification["ok"] = False
             verification.setdefault("hardFailures", []).append("reviews/adjudication.md is missing")

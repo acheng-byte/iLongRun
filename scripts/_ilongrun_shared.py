@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 ILONGRUN_HOME = Path(os.environ.get("ILONGRUN_HOME", str(Path.home() / ".copilot-ilongrun")))
+REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL_CONFIG = ILONGRUN_HOME / "config" / "model-policy.jsonc"
 DEFAULT_MODEL_AVAILABILITY = ILONGRUN_HOME / "config" / "model-availability.json"
 COPILOT_CONFIG_DIR = Path(os.environ.get("COPILOT_CONFIG_DIR", str(Path.home() / ".copilot")))
@@ -197,6 +198,9 @@ def resolve_model_config_path(path: str | Path | None = None) -> Path:
             if modern.exists():
                 return modern
         return candidate
+    repo_default = REPO_ROOT / "config" / "model-policy.jsonc"
+    if repo_default.exists():
+        return repo_default
     modern_default = DEFAULT_MODEL_CONFIG
     if modern_default.exists():
         return modern_default
@@ -252,7 +256,7 @@ def default_model_config() -> dict[str, Any]:
             "test-engineer": "claude-sonnet-4.6",
             "security-auditor": "claude-sonnet-4.6",
             "recovery-agent": "claude-sonnet-4.6",
-            "gpt54-audit-reviewer": "gpt-5.4",
+            "final-audit-reviewer": "gpt-5.4",
         },
         "codingAuditModel": "gpt-5.4",
         "fallback": [
@@ -418,7 +422,8 @@ def model_chain(
     role: str | None = None,
     availability: dict[str, dict[str, Any]] | None = None,
 ) -> list[str]:
-    detected = normalize_model_name(explicit_model, config)
+    explicit = normalize_model_name(explicit_model, config)
+    detected = explicit
     if not detected:
         detected = detect_model_from_text(prompt_text, config)
     base_fallback = list(dict.fromkeys(config.get("fallback", [])))
@@ -439,6 +444,8 @@ def model_chain(
             [item for item in seq if status_of(item) == "unavailable"],
         )
 
+    if explicit:
+        return [explicit]
     if detected:
         remainder = [item for item in base_chain if item != detected and status_of(item) != "unavailable"]
         unavailable = [item for item in base_chain if item != detected and status_of(item) == "unavailable"]

@@ -56,11 +56,10 @@ MANAGED_PLAN_START = "<!-- ILONGRUN:PLAN:START -->"
 MANAGED_PLAN_END = "<!-- ILONGRUN:PLAN:END -->"
 MANAGED_STRATEGY_START = "<!-- ILONGRUN:STRATEGY:START -->"
 MANAGED_STRATEGY_END = "<!-- ILONGRUN:STRATEGY:END -->"
-REVIEW_RELATIVE_PATH = "reviews/gpt54-final-review.md"
+REVIEW_RELATIVE_PATH = "reviews/final-review.md"
 ADJUDICATION_RELATIVE_PATH = "reviews/adjudication.md"
 DELIVERY_AUDIT_RELATIVE_PATH = "reviews/delivery-audit.md"
 COMPLETION_RELATIVE_PATH = "COMPLETION.md"
-MODELS_WITH_GPT54_LOGIC = {"gpt-5.4"}
 COMPLETE_WORKSTREAM_STATUSES = {"complete", "completed", "verified", "done", "success", "succeeded", "pass", "passed", "finalized"}
 ACTIVE_WORKSTREAM_STATUSES = {"running", "pending", "blocked", "in-progress", "active"}
 COMPLETE_RUN_STATES = {"complete", "completed", "finalized"}
@@ -1069,7 +1068,12 @@ def normalize_legacy_scheduler_shape(canonical: dict[str, Any], legacy: dict[str
         imported["phase"] = "phase-finalize"
 
     gates = legacy.get("gates") or {}
-    audit_gate = str(gates.get("gpt54Audit") or "").lower()
+    audit_gate = ""
+    for key, value in (gates.items() if isinstance(gates, dict) else []):
+        normalized_key = re.sub(r"[^a-z]", "", str(key or "").lower())
+        if normalized_key.endswith("audit"):
+            audit_gate = str(value or "").lower()
+            break
     if audit_gate in {"fail", "failed", "blocked"}:
         imported["state"] = "blocked"
         imported["phase"] = "phase-audit"
@@ -1328,7 +1332,9 @@ def role_models(config: dict[str, Any]) -> dict[str, str]:
     return copy.deepcopy(config.get("roleModels") or default_model_config().get("roleModels", {}))
 
 
-def role_model_for(role: str, config: dict[str, Any], *, fallback: str = "claude-opus-4.6") -> str:
+def role_model_for(role: str, config: dict[str, Any], *, fallback: str = "claude-opus-4.6", enforced_model: str | None = None) -> str:
+    if enforced_model:
+        return enforced_model
     return role_models(config).get(role, fallback)
 
 
@@ -1454,8 +1460,18 @@ def make_workstream(
         "lastUpdatedAt": now_iso(),
     }
 
-def infer_initial_topology(prompt: str, profile: str, mode: str, config: dict[str, Any], requested_deliverables: list[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def infer_initial_topology(
+    prompt: str,
+    profile: str,
+    mode: str,
+    config: dict[str, Any],
+    requested_deliverables: list[str],
+    *,
+    enforced_model: str | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     role_map = role_models(config)
+    if enforced_model:
+        role_map = {role: enforced_model for role in role_map}
     protocol = load_coding_protocol()
     phases: list[dict[str, Any]] = []
     workstreams: list[dict[str, Any]] = []
@@ -2083,29 +2099,50 @@ def init_scheduler_payload(
     requested_deliverables = infer_requested_deliverables(prompt)
     inferred = infer_completeness(prompt, profile, mode)
     protocol = load_coding_protocol() if profile == "coding" else {}
-    preferred_model = normalize_model_name(explicit_model, cfg) or detect_model_from_text(prompt, cfg)
+    explicit_requested_model = normalize_model_name(explicit_model, cfg)
+    preferred_model = explicit_requested_model or detect_model_from_text(prompt, cfg)
     normalized_session_model = normalize_model_name(session_model, cfg) or session_model
+    enforced_model = explicit_requested_model
     if normalized_session_model:
-        chain = model_chain(cfg, explicit_model=normalized_session_model, availability=availability)
         selected = normalized_session_model
-        control_mode = model_control_mode or "launcher-enforced"
-        fallback = [item for item in chain if item != selected]
-        reason = "launcher-selected" if control_mode == "launcher-enforced" else "explicit-session-model"
+        if explicit_requested_model:
+            chain = [selected]
+        else:
+            discovered_chain = model_chain(
+                cfg,
+                prompt_text=prompt,
+                command="coding" if profile == "coding" else "run",
+                skill="ilongrun-coding" if profile == "coding" else "ilongrun",
+                role="mission-governor",
+                availability=availability,
+            )
+            chain = [selected, *[item for item in discovered_chain if item != selected]]
+        control_mode = model_control_mode or ("explicit-model-locked" if explicit_requested_model else "launcher-enforced")
+        fallback = [] if explicit_requested_model else [item for item in chain if item != selected]
+        reason = "explicit-model-locked" if explicit_requested_model else ("launcher-selected" if control_mode == "launcher-enforced" else "explicit-session-model")
     else:
         chain = model_chain(
             cfg,
-            explicit_model=preferred_model,
-            prompt_text=prompt,
+            explicit_model=explicit_requested_model,
+            prompt_text=None if explicit_requested_model else prompt,
             command="coding" if profile == "coding" else "run",
             skill="ilongrun-coding" if profile == "coding" else "ilongrun",
             role="mission-governor",
             availability=availability,
         )
-        selected = chain[0] if chain else role_model_for("mission-governor", cfg)
-        control_mode = model_control_mode or "launcher-enforced"
-        fallback = [item for item in chain if item != selected]
-        reason = "launcher-selected"
-    phases, workstreams = infer_initial_topology(prompt, profile, mode, cfg, requested_deliverables)
+        selected = chain[0] if chain else role_model_for("mission-governor", cfg, enforced_model=explicit_requested_model)
+        control_mode = model_control_mode or ("explicit-model-locked" if explicit_requested_model else "launcher-enforced")
+        fallback = [] if explicit_requested_model else [item for item in chain if item != selected]
+        reason = "explicit-model-locked" if explicit_requested_model else "launcher-selected"
+    phases, workstreams = infer_initial_topology(
+        prompt,
+        profile,
+        mode,
+        cfg,
+        requested_deliverables,
+        enforced_model=enforced_model,
+    )
+    audit_model = enforced_model or cfg.get("codingAuditModel", "gpt-5.4")
     scheduler = ensure_scheduler_defaults(
         {
             "runId": run_id,
@@ -2120,7 +2157,13 @@ def init_scheduler_payload(
             "modelPreference": preferred_model,
             "selectedModel": selected,
             "modelControlMode": control_mode,
-            "codingAuditModel": cfg.get("codingAuditModel", "gpt-5.4"),
+            "codingAuditModel": audit_model,
+            "modelEnforcement": {
+                "active": bool(enforced_model),
+                "scope": "full-chain" if enforced_model else "entry-selection",
+                "requestedModel": explicit_requested_model,
+                "effectiveModel": selected,
+            },
             "codingProtocol": (
                 {
                     "name": protocol.get("name"),
@@ -2157,8 +2200,8 @@ def init_scheduler_payload(
                 "successCriteria": default_success_criteria(profile, requested_deliverables),
                 "capabilityBoundary": ["local-files", "shell"] + (["public-web"] if profile in {"research", "office"} else []),
                 "modelAllocation": {
-                    role: role_model_for(role, cfg) for role in role_models(cfg)
-                } | {"final-audit": cfg.get("codingAuditModel", "gpt-5.4")},
+                    role: role_model_for(role, cfg, enforced_model=enforced_model) for role in role_models(cfg)
+                } | {"final-audit": audit_model},
             },
             "completedWorkstreams": [],
             "activeWorkstreams": [ws["id"] for ws in workstreams if not ws.get("dependencies")],
@@ -2166,7 +2209,7 @@ def init_scheduler_payload(
                 "required": profile == "coding",
                 "finalReviewPath": REVIEW_RELATIVE_PATH,
                 "adjudicationPath": ADJUDICATION_RELATIVE_PATH,
-                "auditModel": cfg.get("codingAuditModel", "gpt-5.4"),
+                "auditModel": audit_model,
                 "status": "pending" if profile == "coding" else "not-required",
                 "pendingMustFixCount": 0,
                 "mustFix": [],
@@ -3479,7 +3522,7 @@ def verify_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None,
         if finalize_candidate and review_phase and review_phase.get("status") != "complete":
             hard_failures.append("phase-review is not complete")
         if not review_exists:
-            hard_failures.append("reviews/gpt54-final-review.md is missing")
+            hard_failures.append("reviews/final-review.md is missing")
         if not adjudication_exists:
             hard_failures.append("reviews/adjudication.md is missing")
         pending = int((sched.get("reviews") or {}).get("pendingMustFixCount") or 0)

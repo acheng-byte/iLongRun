@@ -11,6 +11,7 @@ HELPER_BIN_DIR="$ILONGRUN_HOME/bin"
 HELPER_CONFIG_DIR="$ILONGRUN_HOME/config"
 MODEL_CONFIG_PATH_DEFAULT="$HELPER_CONFIG_DIR/model-policy.jsonc"
 MODEL_AVAILABILITY_PATH_DEFAULT="$HELPER_CONFIG_DIR/model-availability.json"
+CODING_PROTOCOL_PATH_DEFAULT="$HELPER_CONFIG_DIR/coding-protocol.jsonc"
 LAUNCHER_DIR_NAME=".copilot-ilongrun/launcher"
 COPILOT_CONFIG_DIR="${COPILOT_CONFIG_DIR:-$HOME/.copilot}"
 COPILOT_BIN="${COPILOT_BIN:-$DEFAULT_COPILOT_BIN}"
@@ -32,6 +33,7 @@ SCRIPT_DIR="$(resolve_script_dir)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MODEL_CONFIG_PATH="$MODEL_CONFIG_PATH_DEFAULT"
 MODEL_AVAILABILITY_PATH="$MODEL_AVAILABILITY_PATH_DEFAULT"
+CODING_PROTOCOL_PATH="$CODING_PROTOCOL_PATH_DEFAULT"
 SKILL_MODE=""
 PLUGIN_ARGS=()
 RESOLVED_SKILL_REF=""
@@ -203,13 +205,13 @@ cleanup_legacy_workspace_state() {
 }
 
 ensure_model_paths() {
-  if [ -f "$MODEL_CONFIG_PATH_DEFAULT" ]; then
+  if [ -f "$REPO_ROOT/config/model-policy.jsonc" ]; then
+    MODEL_CONFIG_PATH="$REPO_ROOT/config/model-policy.jsonc"
+  elif [ -f "$MODEL_CONFIG_PATH_DEFAULT" ]; then
     MODEL_CONFIG_PATH="$MODEL_CONFIG_PATH_DEFAULT"
   elif [ -f "${MODEL_CONFIG_PATH_DEFAULT%.jsonc}.json" ]; then
     mv "${MODEL_CONFIG_PATH_DEFAULT%.jsonc}.json" "$MODEL_CONFIG_PATH_DEFAULT"
     MODEL_CONFIG_PATH="$MODEL_CONFIG_PATH_DEFAULT"
-  elif [ -f "$REPO_ROOT/config/model-policy.jsonc" ]; then
-    MODEL_CONFIG_PATH="$REPO_ROOT/config/model-policy.jsonc"
   else
     MODEL_CONFIG_PATH="$REPO_ROOT/config/model-policy.json"
   fi
@@ -217,6 +219,11 @@ ensure_model_paths() {
     MODEL_AVAILABILITY_PATH="$MODEL_AVAILABILITY_PATH_DEFAULT"
   else
     MODEL_AVAILABILITY_PATH="$REPO_ROOT/config/model-availability.json"
+  fi
+  if [ -f "$REPO_ROOT/config/coding-protocol.jsonc" ]; then
+    CODING_PROTOCOL_PATH="$REPO_ROOT/config/coding-protocol.jsonc"
+  else
+    CODING_PROTOCOL_PATH="$CODING_PROTOCOL_PATH_DEFAULT"
   fi
   [ -f "$MODEL_CONFIG_PATH" ] || die "ilongrun model policy not found"
 }
@@ -368,7 +375,7 @@ doctor() {
   local helper_render_board="$(helper_path render_ilongrun_doctor_board.py || true)"
   local helper_skill_lint="$(helper_path lint_ilongrun_skills.py || true)"
   local expected_launchers=(ilongrun ilongrun-coding ilongrun-prompt ilongrun-resume ilongrun-status ilongrun-doctor copilot-ilongrun)
-  local coding_playbooks=(phase-define.md phase-plan.md phase-build.md phase-verify.md phase-review.md phase-ship.md swarm-policy.md js-ts-profile.md workspace-isolation.md task-microcycle.md claim-verification.md recovery-debug.md skill-engineering.md)
+  local coding_playbooks=(phase-define.md phase-plan.md phase-build.md phase-verify.md phase-review.md phase-audit.md phase-finalize.md swarm-policy.md js-ts-profile.md workspace-isolation.md task-microcycle.md claim-verification.md recovery-debug.md skill-engineering.md)
   local tmp_dir checks_file model_probe_json fleet_probe_json selftest_err selftest_out selftest_state_log fleet_cache_path
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ilongrun-doctor.XXXXXX")"
   checks_file="$tmp_dir/checks.tsv"
@@ -437,9 +444,9 @@ PY
   if [ -n "$copilot_bin" ]; then doctor_row copilot ok "$copilot_bin"; else doctor_row copilot fail "未检测到 copilot CLI"; issues=$((issues+1)); fi
   if [ -n "$login" ]; then doctor_row login ok "$login"; else doctor_row login fail "未登录 GitHub Copilot"; issues=$((issues+1)); fi
   if [ -f "$MODEL_CONFIG_PATH" ]; then doctor_row model_policy ok "$MODEL_CONFIG_PATH"; else doctor_row model_policy fail "模型配置文件缺失"; issues=$((issues+1)); fi
-  if [ -f "$ILONGRUN_HOME/config/coding-protocol.jsonc" ]; then
+  if [ -f "$CODING_PROTOCOL_PATH" ]; then
     local protocol_check
-    protocol_check="$(python3 - "$ILONGRUN_HOME/config/coding-protocol.jsonc" "$HELPER_BIN_DIR" <<'PY'
+    protocol_check="$(python3 - "$CODING_PROTOCOL_PATH" "$HELPER_BIN_DIR" <<'PY'
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[2])
@@ -458,7 +465,7 @@ print("ok" if not missing else "missing:" + ",".join(missing))
 PY
 )"
     if [ "$protocol_check" = "ok" ]; then
-      doctor_row coding_protocol ok "$ILONGRUN_HOME/config/coding-protocol.jsonc"
+      doctor_row coding_protocol ok "$CODING_PROTOCOL_PATH"
     else
       doctor_row coding_protocol fail "coding protocol 缺字段：${protocol_check#missing:}"
       issues=$((issues+1))
@@ -484,7 +491,7 @@ PY
     issues=$((issues+1))
   fi
   local missing_agents=()
-  for agent in ilongrun-test-engineer.agent.md ilongrun-security-auditor.agent.md; do
+  for agent in ilongrun-test-engineer.agent.md ilongrun-security-auditor.agent.md ilongrun-final-audit-reviewer.agent.md; do
     [ -f "$HOME/.copilot/agents/$agent" ] || missing_agents+=("$agent")
   done
   if [ "${#missing_agents[@]}" -eq 0 ]; then
@@ -712,7 +719,9 @@ if [ "$subcmd" = "run" ] || [ "$subcmd" = "coding" ]; then
   PREPARE_RUN="$(helper_path prepare_ilongrun_run.py || true)"
   [ -n "$PREPARE_RUN" ] || die "prepare_ilongrun_run helper missing"
   if [ "$dry_run" -eq 0 ]; then
-    prepare_cmd=(python3 "$PREPARE_RUN" --workspace "$PWD" --task "$payload_text" --launcher-mode launcher-preallocated --session-model "$selected_model" --model-control-mode launcher-enforced --print-json)
+    model_control_mode="launcher-enforced"
+    [ -n "$model" ] && model_control_mode="explicit-model-locked"
+    prepare_cmd=(python3 "$PREPARE_RUN" --workspace "$PWD" --task "$payload_text" --launcher-mode launcher-preallocated --session-model "$selected_model" --model-control-mode "$model_control_mode" --print-json)
     [ -n "$model" ] && prepare_cmd+=(--explicit-model "$model")
     [ -n "$force_profile" ] && prepare_cmd+=(--force-profile "$force_profile")
     prepared_json="$("${prepare_cmd[@]}")" || die "failed to prepare fresh ILongRun run"

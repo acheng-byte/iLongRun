@@ -104,6 +104,10 @@ def build_command(args, skill_ref: str, payload: str, model: str) -> list[str]:
     return cmd
 
 
+def launcher_model_control_mode(args) -> str:
+    return "explicit-model-locked" if args.explicit_model else "launcher-enforced"
+
+
 def resolved_run_paths(args, workspace: Path, run_ref: str) -> dict[str, str]:
     target = resolve_run_target(workspace, run_ref)
     return {
@@ -365,7 +369,7 @@ def dispatch_fleet_waves(args, workspace: Path, run_ref: str, model: str) -> boo
         mark_fleet_dispatch_started(workspace, run_ref, str(wave.get("id")), model)
         rc, output = run_and_stream(cmd, workspace, {
             "LONGRUN_SELECTED_MODEL": model,
-            "LONGRUN_MODEL_CONTROL_MODE": "launcher-enforced",
+            "LONGRUN_MODEL_CONTROL_MODE": launcher_model_control_mode(args),
             "LONGRUN_RUN_ID": run_ref,
             "LONGRUN_RUN_DIR": paths["runDir"],
             "LONGRUN_SCHEDULER_PATH": paths["schedulerPath"],
@@ -425,7 +429,7 @@ def resume_after_fleet(args, workspace: Path, run_ref: str, model: str) -> bool:
     cmd = build_command(args, args.resume_skill_ref, payload, model)
     rc, output = run_and_stream(cmd, workspace, {
         "LONGRUN_SELECTED_MODEL": model,
-        "LONGRUN_MODEL_CONTROL_MODE": "launcher-enforced",
+        "LONGRUN_MODEL_CONTROL_MODE": launcher_model_control_mode(args),
         "LONGRUN_RUN_ID": run_ref,
         "LONGRUN_RUN_DIR": paths["runDir"],
         "LONGRUN_SCHEDULER_PATH": paths["schedulerPath"],
@@ -435,7 +439,15 @@ def resume_after_fleet(args, workspace: Path, run_ref: str, model: str) -> bool:
     return rc == 0 and not detect_fallback_reason(output)
 
 
-def patch_scheduler(workspace: Path, run_ref: str | None, *, selected_model: str | None = None, note: str | None = None, fallback_reason: str | None = None) -> None:
+def patch_scheduler(
+    workspace: Path,
+    run_ref: str | None,
+    *,
+    selected_model: str | None = None,
+    control_mode: str | None = None,
+    note: str | None = None,
+    fallback_reason: str | None = None,
+) -> None:
     if not run_ref:
         return
     try:
@@ -445,7 +457,8 @@ def patch_scheduler(workspace: Path, run_ref: str | None, *, selected_model: str
     sched = reconcile_scheduler(target)
     if selected_model:
         sched["selectedModel"] = selected_model
-        sched["modelControlMode"] = "launcher-enforced"
+        active_control_mode = control_mode or str(sched.get("modelControlMode") or "launcher-enforced")
+        sched["modelControlMode"] = active_control_mode
         history = list(sched.get("modelAttemptHistory") or [])
         history.append({
             "ts": now_iso(),
@@ -529,7 +542,7 @@ def maybe_finalize_blocked(workspace: Path, run_ref: str, note: str) -> None:
     )
 
 
-def maybe_run_gpt54_audit(args, workspace: Path, run_ref: str) -> bool:
+def maybe_run_final_audit(args, workspace: Path, run_ref: str) -> bool:
     target = resolve_run_target(workspace, run_ref)
     paths = resolved_run_paths(args, workspace, run_ref)
     sched = reconcile_scheduler(target)
@@ -541,8 +554,9 @@ def maybe_run_gpt54_audit(args, workspace: Path, run_ref: str) -> bool:
         return True
     if final_review_path(target).exists() and final_review_path(target).stat().st_size > 0:
         return True
-    audit_model = load_model_config(args.model_config).get("codingAuditModel", "gpt-5.4")
-    print(f"[ILongRun] pending coding audit; starting final audit pass ({display_model_name(audit_model, load_model_config(args.model_config))} / {audit_model})")
+    config = load_model_config(args.model_config)
+    audit_model = (sched.get("reviews") or {}).get("auditModel") or sched.get("codingAuditModel") or config.get("codingAuditModel", "gpt-5.4")
+    print(f"[ILongRun] pending coding audit; starting final audit pass ({display_model_name(audit_model, config)} / {audit_model})")
     payload = (
         "[ILongRun supervisor context]\n"
         f"Resume existing run-id: {run_ref}\n"
@@ -557,7 +571,7 @@ def maybe_run_gpt54_audit(args, workspace: Path, run_ref: str) -> bool:
     cmd = build_command(args, args.resume_skill_ref or args.skill_ref, payload, audit_model)
     rc, output = run_and_stream(cmd, workspace, {
         "LONGRUN_SELECTED_MODEL": audit_model,
-        "LONGRUN_MODEL_CONTROL_MODE": "launcher-enforced",
+        "LONGRUN_MODEL_CONTROL_MODE": launcher_model_control_mode(args),
         "LONGRUN_RUN_ID": run_ref,
         "LONGRUN_RUN_DIR": paths["runDir"],
         "LONGRUN_SCHEDULER_PATH": paths["schedulerPath"],
@@ -655,11 +669,11 @@ def main() -> int:
     for index, model in enumerate(chain):
         human = display_model_name(model, config)
         print(f"[ILongRun] attempt {index + 1}/{len(chain)} with model: {human} ({model})")
-        patch_scheduler(workspace, run_ref, selected_model=model, note="launcher-attempt")
+        patch_scheduler(workspace, run_ref, selected_model=model, control_mode=launcher_model_control_mode(args), note="launcher-attempt")
         cmd = build_command(args, current_skill, current_payload, model)
         rc, output = run_and_stream(cmd, workspace, {
             "LONGRUN_SELECTED_MODEL": model,
-            "LONGRUN_MODEL_CONTROL_MODE": "launcher-enforced",
+            "LONGRUN_MODEL_CONTROL_MODE": launcher_model_control_mode(args),
             "LONGRUN_RUN_ID": run_ref,
             "LONGRUN_RUN_DIR": target_paths.get("runDir", ""),
             "LONGRUN_SCHEDULER_PATH": target_paths.get("schedulerPath", ""),
@@ -673,7 +687,7 @@ def main() -> int:
                 if fleet_changed and not resume_after_fleet(args, workspace, run_ref, model):
                     maybe_finalize_blocked(workspace, run_ref, "ILongRun post-fleet resume failed")
                     return 1
-                if not maybe_run_gpt54_audit(args, workspace, run_ref):
+                if not maybe_run_final_audit(args, workspace, run_ref):
                     maybe_finalize_blocked(workspace, run_ref, "ILongRun final audit pass failed")
                     return 1
                 if maybe_finalize_complete(workspace, run_ref):
@@ -688,7 +702,7 @@ def main() -> int:
             if run_ref:
                 maybe_finalize_blocked(workspace, run_ref, "ILongRun launcher run failed without model fallback")
             return rc or 1
-        patch_scheduler(workspace, run_ref, selected_model=model, fallback_reason=fallback_reason)
+        patch_scheduler(workspace, run_ref, selected_model=model, control_mode=launcher_model_control_mode(args), fallback_reason=fallback_reason)
         if not notified_recovery and args.mode in {"run", "resume"} and run_ref:
             notify_event(
                 workspace,
@@ -711,7 +725,7 @@ def main() -> int:
             retry_cmd = build_command(args, current_skill, current_payload, model)
             rc, output = run_and_stream(retry_cmd, workspace, {
                 "LONGRUN_SELECTED_MODEL": model,
-                "LONGRUN_MODEL_CONTROL_MODE": "launcher-enforced",
+                "LONGRUN_MODEL_CONTROL_MODE": launcher_model_control_mode(args),
                 "LONGRUN_RUN_ID": run_ref,
                 "LONGRUN_LAUNCH_MODE": "ilongrun-backoff",
             })
@@ -722,7 +736,7 @@ def main() -> int:
                     if fleet_changed and not resume_after_fleet(args, workspace, run_ref, model):
                         maybe_finalize_blocked(workspace, run_ref, "ILongRun post-fleet resume failed after retry")
                         return 1
-                    if not maybe_run_gpt54_audit(args, workspace, run_ref):
+                    if not maybe_run_final_audit(args, workspace, run_ref):
                         maybe_finalize_blocked(workspace, run_ref, "ILongRun final audit pass failed after retry")
                         return 1
                     if maybe_finalize_complete(workspace, run_ref):

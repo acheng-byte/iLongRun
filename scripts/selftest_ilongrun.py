@@ -145,6 +145,30 @@ def main() -> int:
         assert (prepared_scheduler.get("workspaceIsolation") or {}).get("enabled") is True
         assert (prepared_scheduler.get("phaseGuards") or {}).get("claimVerification")
         assert (prepared_scheduler.get("reviewMatrix") or {}).get("gates")
+        assert "gpt54-audit-reviewer" not in ((prepared_scheduler.get("mission") or {}).get("modelAllocation") or {})
+
+        explicit_workspace = temp_root / "explicit-model-workspace"
+        explicit_workspace.mkdir(parents=True, exist_ok=True)
+        run(
+            str(ROOT / "prepare_ilongrun_run.py"),
+            "--workspace", str(explicit_workspace),
+            "--task", "修复一个小 bug 并完成最终终审",
+            "--force-profile", "coding",
+            "--explicit-model", "claude-haiku-4.5",
+            "--session-model", "claude-haiku-4.5",
+            "--model-control-mode", "explicit-model-locked",
+        )
+        explicit_run_id = (explicit_workspace / ".copilot-ilongrun" / "state" / "latest-run-id").read_text(encoding="utf-8").strip()
+        explicit_scheduler = read_json(explicit_workspace / ".copilot-ilongrun" / "runs" / explicit_run_id / "scheduler.json")
+        assert explicit_scheduler.get("selectedModel") == "claude-haiku-4.5"
+        assert explicit_scheduler.get("codingAuditModel") == "claude-haiku-4.5"
+        assert explicit_scheduler.get("fallbackChain") == []
+        assert (explicit_scheduler.get("modelEnforcement") or {}).get("active") is True
+        assert (explicit_scheduler.get("modelEnforcement") or {}).get("scope") == "full-chain"
+        assert (explicit_scheduler.get("reviews") or {}).get("auditModel") == "claude-haiku-4.5"
+        assert set((explicit_scheduler.get("mission") or {}).get("modelAllocation", {}).values()) == {"claude-haiku-4.5"}
+        assert "gpt54-audit-reviewer" not in ((explicit_scheduler.get("mission") or {}).get("modelAllocation") or {})
+        assert {ws.get("ownerModel") for ws in (explicit_scheduler.get("workstreams") or [])} == {"claude-haiku-4.5"}
 
         model_info_run = run(
             str(ROOT / "model_policy_info.py"),
@@ -165,6 +189,18 @@ def main() -> int:
         )
         model_info_coding_payload = json.loads(model_info_coding.stdout)
         assert model_info_coding_payload["selected"] == "claude-opus-4.6"
+
+        model_info_explicit = run(
+            str(ROOT / "model_policy_info.py"),
+            "--config", str(ROOT.parent / "config" / "model-policy.jsonc"),
+            "--subcommand", "coding",
+            "--skill", "ilongrun-coding",
+            "--explicit-model", "claude-haiku-4.5",
+            "--json",
+        )
+        model_info_explicit_payload = json.loads(model_info_explicit.stdout)
+        assert model_info_explicit_payload["selected"] == "claude-haiku-4.5"
+        assert model_info_explicit_payload["chain"] == ["claude-haiku-4.5"]
 
         doctor_log = temp_root / "doctor.log"
         doctor_log.write_text(
@@ -450,7 +486,7 @@ def main() -> int:
 
         review_dir = run_dir / "reviews"
         review_dir.mkdir(exist_ok=True)
-        (review_dir / "gpt54-final-review.md").write_text(
+        (review_dir / "final-review.md").write_text(
             "# ILongRun Final Review\n\n## Run Metadata\n- Run ID: `demo`\n- Audit model: `gpt-5.4`\n\n## Summary\n- 审查范围：demo\n- 总发现数：`0`\n\n## Findings\n### Must-Fix (Critical)\n- None.\n\n### Should-Fix (Major)\n- None.\n\n### Nit (Minor)\n- naming polish only\n\n## Suggested Fixes\n- none\n\n## Residual Risks\n- low residual risk\n\n## Verdict\n- PASS\n",
             encoding="utf-8",
         )
@@ -543,7 +579,7 @@ def main() -> int:
             (ledger_run_dir / ws["resultPath"]).write_text("# Result\n\nDone.\n", encoding="utf-8")
             (ledger_run_dir / ws["evidencePath"]).write_text("# Evidence\n\nVerified.\n", encoding="utf-8")
         (ledger_run_dir / "reviews").mkdir(exist_ok=True)
-        (ledger_run_dir / "reviews" / "gpt54-final-review.md").write_text(
+        (ledger_run_dir / "reviews" / "final-review.md").write_text(
             "# GPT-5.4 Final Review\n\n## Must-fix\n- None.\n\n## Suggested fixes\n- none\n\n## Residual risks\n- low\n",
             encoding="utf-8",
         )
@@ -615,10 +651,10 @@ def main() -> int:
         drift_scheduler["selectedModel"] = "claude-opus-4.6"
         (drift_legacy / "scheduler.json").write_text(json.dumps(drift_scheduler, ensure_ascii=False, indent=2), encoding="utf-8")
         (drift_legacy / "reviews").mkdir(parents=True, exist_ok=True)
-        (drift_legacy / "reviews" / "gpt54-final-review.md").write_text("# Final Review\n\n## Must-fix\n- None\n", encoding="utf-8")
+        (drift_legacy / "reviews" / "final-review.md").write_text("# Final Review\n\n## Must-fix\n- None\n", encoding="utf-8")
         run(str(ROOT / "reconcile_ilongrun_run.py"), "--workspace", str(drift_workspace), "--run-id", drift_run_id)
         assert not drift_legacy.exists()
-        assert (drift_canonical / "reviews" / "gpt54-final-review.md").exists()
+        assert (drift_canonical / "reviews" / "final-review.md").exists()
         assert (drift_canonical / "workstreams" / "ws-001" / "result.md").read_text(encoding="utf-8").startswith("# Result")
         merge_reports = list((drift_workspace / ".copilot-ilongrun" / "legacy-imports" / "run-merges").glob("*.json"))
         assert merge_reports

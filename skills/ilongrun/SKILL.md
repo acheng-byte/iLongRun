@@ -63,8 +63,9 @@ DEFINE → PLAN → BUILD → VERIFY → REVIEW → AUDIT → FINALIZE
 ## coding 任务特殊规则
 
 - `phase-build` 之外不要把 wave 交给 `fleet`
-- finalize 前必须存在 `reviews/gpt54-final-review.md`
+- finalize 前必须存在 `reviews/final-review.md`
 - 必须同步生成 `reviews/adjudication.md`
+- 若用户显式传入 `--model <slug>`，则 review / audit / finalize 也必须沿用该模型
 - 若 `must-fix` 非空，禁止 finalize complete
 - 若当前会话不是要求的最终终审模型，且只剩 final audit，应留下 checkpoint，等待 supervisor 拉起最终终审
 - coding executor 必须遵循 `ilongrun-coding` 的方法学约束

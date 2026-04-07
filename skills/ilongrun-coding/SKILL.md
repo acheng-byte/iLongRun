@@ -69,13 +69,13 @@ DEFINE → PLAN → BUILD → VERIFY → REVIEW → AUDIT → FINALIZE
 - review gate 不能被 final audit 代替
 
 ### `phase-audit`
-读取：`phase-ship.md`
+读取：`phase-audit.md`
 
 - 只做最终终审、adjudication、release blocker 判断
 - 若仍有 `must-fix`，必须回流前序 workstream
 
 ### `phase-finalize`
-读取：`phase-ship.md` + `claim-verification.md`
+读取：`phase-finalize.md` + `claim-verification.md`
 
 - 只有 claim verification 完整时才允许完成声明
 - 生成 completion report
@@ -116,6 +116,7 @@ spec-lock → red → verify-red → green → verify-green → self-review → 
 - `phase-build` 才允许考虑 `fleet`
 - `phase-review` / `phase-audit` / `phase-finalize` 一律 `internal`
 - 涉及 Git / release / security gate / adjudication 的任务，一律 `internal`
+- 若用户显式传入 `--model <slug>`，则 review / audit / finalize 也必须沿用该模型，不得静默切换
 - 多 worker 并行必须满足：
   - writeSet 不重叠
   - handoffArtifacts 明确
@@ -160,4 +161,4 @@ spec-lock → red → verify-red → green → verify-green → self-review → 
 - 与本协议冲突的自由发挥，以 `config/coding-protocol.jsonc` 为准
 - 空节统一写 `- None.`
 - coding run 不允许绕过 `phase-review` 直接 complete
-- `reviews/gpt54-final-review.md` 仍保留兼容文件名
+- `reviews/final-review.md` 作为唯一有效文件名

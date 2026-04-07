@@ -31,7 +31,7 @@ def _metadata_lines(pairs: list[tuple[str, Any]]) -> list[str]:
 def build_final_review_template_markdown(
     *,
     run_id: str = "<run-id>",
-    audit_model: str = "gpt-5.4",
+    audit_model: str = "<audit-model>",
     implementation_model: str = "<selected-model>",
 ) -> str:
     lines = [
@@ -43,7 +43,7 @@ def build_final_review_template_markdown(
                 ("Run ID", run_id),
                 ("Audit model", audit_model),
                 ("Implementation model", implementation_model),
-                ("Review path", "reviews/gpt54-final-review.md"),
+                ("Review path", "reviews/final-review.md"),
             ]
         ),
         "",
@@ -99,7 +99,7 @@ def build_adjudication_report_markdown(
             [
                 ("Run ID", run_id),
                 ("Audit model", audit_model),
-                ("Review path", "reviews/gpt54-final-review.md"),
+                ("Review path", "reviews/final-review.md"),
                 ("Adjudication path", "reviews/adjudication.md"),
             ]
         ),

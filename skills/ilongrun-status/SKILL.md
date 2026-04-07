@@ -23,7 +23,7 @@ disable-model-invocation: false
 3. `strategy.md`
 4. `task-list-N.md`
 5. `workstreams/ws-*/status.json`（按需）
-6. `reviews/gpt54-final-review.md`（若存在）
+6. `reviews/final-review.md`（若存在）
 7. `reviews/adjudication.md`（若存在）
 8. `COMPLETION.md`（若存在）
 9. `journal.jsonl` 尾部（仅在需要解释错误 / 限流时）

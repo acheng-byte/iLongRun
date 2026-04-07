@@ -1,5 +1,5 @@
 {
-  // iLongRun v0.6.0 模型策略单一真值源
+  // iLongRun 当前主线模型策略单一真值源
   // 选模优先级：
   // 1) 命令行显式 --model
   // 2) commandDefaults（命令默认模型）
@@ -50,7 +50,7 @@
     "test-engineer": "claude-sonnet-4.6",
     "security-auditor": "claude-sonnet-4.6",
     "recovery-agent": "claude-sonnet-4.6",
-    "gpt54-audit-reviewer": "gpt-5.4"
+    "final-audit-reviewer": "gpt-5.4"
   },
   "codingAuditModel": "gpt-5.4",
   "fallback": [

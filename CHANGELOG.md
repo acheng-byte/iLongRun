@@ -1,5 +1,27 @@
 # 更新日志
 
+## Unreleased
+
+## v0.7.1
+
+### 清理与一致性
+- **历史命名硬清理**：移除 `phase-ship.md`，拆分为 `phase-audit.md` 与 `phase-finalize.md`
+- **终审命名去模型化**：`ilongrun-gpt54-audit-reviewer.agent.md` 改为 `ilongrun-final-audit-reviewer.agent.md`
+- **最终审查报告路径去模型化**：`reviews/gpt54-final-review.md` 改为 `reviews/final-review.md`
+- **新增命名清理说明**：补充 `docs/内部命名清理说明.md`
+- **新增全局审计说明**：补充 `docs/项目全局审计与整改说明.md`
+
+### 模型语义
+- **`--model` 升级为全链路强制**：显式指定模型时，run / coding / review / audit / finalize 全链路统一使用该模型
+- **禁止跨模型 fallback**：显式 `--model` 场景下不再静默切到其他模型，只允许同模型重试
+- **scheduler 模型元数据收敛**：`selectedModel`、`codingAuditModel`、`mission.modelAllocation`、review owner model 保持一致
+- **仓库命令优先读取仓库配置**：直接运行仓库内 `scripts/copilot-ilongrun` 时，优先使用当前仓库 `config/`，避免被 `~/.copilot-ilongrun/config/` 的旧配置污染
+
+### 文档
+- **README 重构为新手入口页**：首页聚焦“这是什么、怎么安装、怎么开始、怎么看结果”
+- **快速开始重写**：补齐 `--model` 全链路强制语义与常见排障
+- **架构文档重写**：增加系统总览图与 coding 生命周期图，明确 `/fleet` 边界与模型锁定规则
+
 ## v0.7.0
 
 `ilongrun-coding` 正式升级为带 Superpowers 方法学强化层的 **Coding Discipline Kernel**：保留原有蜂群编排骨架，但把 workspace isolation、task microcycle、claim verification、root-cause recovery、skill engineering 全部写进协议与账本。

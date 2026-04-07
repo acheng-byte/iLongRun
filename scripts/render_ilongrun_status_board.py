@@ -269,7 +269,7 @@ def compute_snapshot(sched: dict[str, Any], target) -> dict[str, Any]:
         elif not methodology.get("claimVerificationReady"):
             next_steps.append("先补 fresh evidence，再尝试 finalize。")
     if not review_exists and sched.get("profile") == "coding":
-        next_steps.append("补齐 `reviews/gpt54-final-review.md`。")
+        next_steps.append("补齐 `reviews/final-review.md`。")
     if not adjudication_exists and sched.get("profile") == "coding":
         next_steps.append("补齐 `reviews/adjudication.md`。")
     if not completion_score:
