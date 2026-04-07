@@ -108,6 +108,58 @@ def launcher_model_control_mode(args) -> str:
     return "explicit-model-locked" if args.explicit_model else "launcher-enforced"
 
 
+def supervisor_model_context(args) -> tuple[str | None, str | None, str | None]:
+    if args.mode == "prompt":
+        return "prompt", "ilongrun-prompt", "mission-governor"
+    if args.mode == "status":
+        return "status", "ilongrun-status", "mission-governor"
+    if args.mode == "resume":
+        return "resume", "ilongrun-resume", "mission-governor"
+    if args.mode == "run" and args.force_profile == "coding":
+        return "coding", "ilongrun-coding", "executor"
+    return "run", "ilongrun", "mission-governor"
+
+
+def chain_from_scheduler(workspace: Path, run_ref: str | None) -> list[str]:
+    if not run_ref:
+        return []
+    try:
+        target = resolve_run_target(workspace, run_ref)
+    except Exception:
+        return []
+    sched = read_json(scheduler_path(target), {})
+    selected = str(sched.get("selectedModel") or "").strip()
+    fallback = [str(item).strip() for item in (sched.get("fallbackChain") or []) if str(item).strip()]
+    if not selected:
+        return []
+    return [selected, *[item for item in fallback if item != selected]]
+
+
+def supervisor_model_chain(
+    args,
+    *,
+    workspace: Path,
+    run_ref: str | None,
+    payload: str,
+    config: dict[str, object],
+    availability: dict[str, dict[str, object]],
+) -> list[str]:
+    if args.explicit_model:
+        return model_chain(config, explicit_model=args.explicit_model, availability=availability)
+    inherited = chain_from_scheduler(workspace, run_ref)
+    if inherited:
+        return inherited
+    command, skill, role = supervisor_model_context(args)
+    return model_chain(
+        config,
+        prompt_text=payload,
+        command=command,
+        skill=skill,
+        role=role,
+        availability=availability,
+    )
+
+
 def resolved_run_paths(args, workspace: Path, run_ref: str) -> dict[str, str]:
     target = resolve_run_target(workspace, run_ref)
     return {
@@ -624,7 +676,6 @@ def main() -> int:
 
     availability_cache = read_model_availability_for_ilongrun(args.availability_cache)
     availability = model_availability_snapshot(config, cache=availability_cache)
-    chain = model_chain(config, explicit_model=args.explicit_model, prompt_text=args.payload, availability=availability)
     current_skill = args.skill_ref
     current_payload = args.payload
     run_ref = args.target_run_id or ""
@@ -664,6 +715,15 @@ def main() -> int:
             "[/ILongRun launcher context]\n\n"
             f"{args.payload}"
         ).strip()
+
+    chain = supervisor_model_chain(
+        args,
+        workspace=workspace,
+        run_ref=run_ref,
+        payload=current_payload,
+        config=config,
+        availability=availability,
+    )
 
     notified_recovery = False
     for index, model in enumerate(chain):

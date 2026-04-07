@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## v0.8.0
+
+### 新增
+- **新增 `ilongrun-model`**：提供 `ilongrun-model` / `copilot-ilongrun model` / `/ilongrun-model` 三个统一入口，用于热切换后续新 run 的默认主模型
+- **新增模型管理 helper**：`scripts/manage_ilongrun_model.py` 负责 `show / set / reset`，支持 alias 归一化、双写安装态/仓库态配置、未知模型报错
+- **新增模型管理 skill**：`skills/ilongrun-model/SKILL.md` 支持在 Copilot CLI 对话框中直接查看或切换模板模型
+
+### 模型策略
+- **主执行模板可热切换**：`ilongrun-model <slug>` 会同步更新 `run / coding / ilongrun / ilongrun-coding` 与主执行角色模板
+- **审查模板固定为 GPT-5.4**：`code-reviewer / test-engineer / security-auditor` 默认收敛到 `gpt-5.4`
+- **final audit 继续独立**：`codingAuditModel` 与 `roleModels.final-audit-reviewer` 保持独立，不被 `ilongrun-model` 改写
+- **resume 优先继承历史 run 模型**：无显式 `--model` 时，`resume` 先读取目标 run 的 `selectedModel`
+- **launcher / supervisor 选模收敛**：`run` 首跳按 run 模板、`coding` 首跳按 coding 模板，不再被 supervisor 误算成 fallback 首项
+
+### 安装与诊断
+- **安装/卸载链路补齐 `ilongrun-model`**：global launcher、bare commands、卸载脚本与清理脚本同步纳入
+- **doctor 新增模型命令检查**：补充 `launcher.ilongrun-model`、`/ilongrun-model` skill 与模型管理 helper 完整性检查
+- **技能 lint 纳入新 skill**：默认 lint 目标增加 `ilongrun-model`
+
+### 文档
+- **README / 快速开始同步补齐**：增加 `ilongrun-model` 用法、热切换范围与“只影响后续新 run”的说明
+- **新增发版说明**：补充 `docs/发版说明-v0.8.0.md`
+
 ## v0.7.1
 
 ### 清理与一致性

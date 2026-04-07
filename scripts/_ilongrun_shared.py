@@ -25,6 +25,20 @@ KNOWN_MODEL_DISPLAY = {
     "gpt-5.4": "GPT-5.4",
     "gpt-5-mini": "GPT-5 mini",
 }
+PRIMARY_MODEL_ROLE_NAMES = (
+    "mission-governor",
+    "strategy-synthesizer",
+    "phase-planner",
+    "workstream-planner",
+    "ledger-syncer",
+    "executor",
+    "recovery-agent",
+)
+FIXED_REVIEW_ROLE_MODELS = {
+    "code-reviewer": "gpt-5.4",
+    "test-engineer": "gpt-5.4",
+    "security-auditor": "gpt-5.4",
+}
 MODEL_ALIASES = {
     "claude opus 4.6": "claude-opus-4.6",
     "claude-opus-4.6": "claude-opus-4.6",
@@ -252,9 +266,9 @@ def default_model_config() -> dict[str, Any]:
             "workstream-planner": "claude-sonnet-4.6",
             "ledger-syncer": "claude-sonnet-4.6",
             "executor": "claude-opus-4.6",
-            "code-reviewer": "claude-sonnet-4.6",
-            "test-engineer": "claude-sonnet-4.6",
-            "security-auditor": "claude-sonnet-4.6",
+            "code-reviewer": "gpt-5.4",
+            "test-engineer": "gpt-5.4",
+            "security-auditor": "gpt-5.4",
             "recovery-agent": "claude-sonnet-4.6",
             "final-audit-reviewer": "gpt-5.4",
         },
@@ -379,6 +393,14 @@ def configured_default_model(config: dict[str, Any], *, command: str | None = No
         if normalized:
             return normalized
     return None
+
+
+def primary_model_role_names() -> tuple[str, ...]:
+    return PRIMARY_MODEL_ROLE_NAMES
+
+
+def fixed_review_role_models() -> dict[str, str]:
+    return copy.deepcopy(FIXED_REVIEW_ROLE_MODELS)
 
 
 def normalize_model_name(value: str | None, config: dict[str, Any] | None = None) -> str | None:

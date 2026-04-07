@@ -44,6 +44,7 @@ usage() {
 Usage:
   ilongrun "<task>"
   ilongrun-coding "<coding-task>"
+  ilongrun-model [<model>|reset]
   ilongrun-prompt "<task>"
   ilongrun-resume [run-id|latest]
   ilongrun-status [run-id|latest]
@@ -52,6 +53,7 @@ Usage:
 Advanced:
   copilot-ilongrun run [--detach] [--max-continues N] [--model MODEL] [--dry-run] <task>
   copilot-ilongrun coding [--detach] [--max-continues N] [--model MODEL] [--dry-run] <task>
+  copilot-ilongrun model [<model>|reset]
   copilot-ilongrun prompt [--model MODEL] [--dry-run] <task>
   copilot-ilongrun resume [--detach] [--max-continues N] [--model MODEL] [run-id|latest]
   copilot-ilongrun status [run-id|latest]
@@ -81,6 +83,10 @@ find_bin_from_common_locations() {
 
 helper_path() {
   local name="$1"
+  if [ -x "$SCRIPT_DIR/$name" ]; then
+    printf '%s\n' "$SCRIPT_DIR/$name"
+    return 0
+  fi
   if [ -x "$REPO_ROOT/scripts/$name" ]; then
     printf '%s\n' "$REPO_ROOT/scripts/$name"
     return 0
@@ -241,6 +247,34 @@ selected_model_for_payload() {
   local subcommand="$1"
   local payload="$2"
   local explicit_model="${3:-}"
+  if [ "$subcommand" = "resume" ] && [ -z "$explicit_model" ]; then
+    local resume_selected
+    resume_selected="$(python3 - "$PWD" "$payload" "$SCRIPT_DIR" "$REPO_ROOT/scripts" "$HELPER_BIN_DIR" <<'PY'
+import sys
+from pathlib import Path
+
+workspace = Path(sys.argv[1])
+run_ref = sys.argv[2]
+script_paths = [Path(sys.argv[3]), Path(sys.argv[4]), Path(sys.argv[5])]
+for script_dir in script_paths:
+    lib = script_dir / "_ilongrun_lib.py"
+    if lib.exists():
+        sys.path.insert(0, str(script_dir))
+        break
+try:
+    from _ilongrun_lib import resolve_run_target, scheduler_path, read_json  # type: ignore
+    target = resolve_run_target(workspace, run_ref)
+    sched = read_json(scheduler_path(target), {})
+    print(str(sched.get("selectedModel") or "").strip())
+except Exception:
+    print("")
+PY
+)"
+    if [ -n "$resume_selected" ]; then
+      printf '%s\n' "$resume_selected"
+      return 0
+    fi
+  fi
   local helper
   helper="$(helper_path model_policy_info.py || true)"
   [ -n "$helper" ] || { printf 'claude-sonnet-4.6\n'; return 0; }
@@ -372,9 +406,10 @@ doctor() {
   local helper_fleet_probe="$(helper_path probe_fleet_capability.py || true)"
   local helper_notify="$(helper_path notify_macos.py || true)"
   local helper_cleanup="$(helper_path cleanup_legacy_workspace.py || true)"
+  local helper_model="$(helper_path manage_ilongrun_model.py || true)"
   local helper_render_board="$(helper_path render_ilongrun_doctor_board.py || true)"
   local helper_skill_lint="$(helper_path lint_ilongrun_skills.py || true)"
-  local expected_launchers=(ilongrun ilongrun-coding ilongrun-prompt ilongrun-resume ilongrun-status ilongrun-doctor copilot-ilongrun)
+  local expected_launchers=(ilongrun ilongrun-coding ilongrun-model ilongrun-prompt ilongrun-resume ilongrun-status ilongrun-doctor copilot-ilongrun)
   local coding_playbooks=(phase-define.md phase-plan.md phase-build.md phase-verify.md phase-review.md phase-audit.md phase-finalize.md swarm-policy.md js-ts-profile.md workspace-isolation.md task-microcycle.md claim-verification.md recovery-debug.md skill-engineering.md)
   local tmp_dir checks_file model_probe_json fleet_probe_json selftest_err selftest_out selftest_state_log fleet_cache_path
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ilongrun-doctor.XXXXXX")"
@@ -504,6 +539,18 @@ PY
     doctor_row skill_lint ok "$helper_skill_lint"
   else
     doctor_row skill_lint fail "lint_ilongrun_skills.py 缺失"
+    issues=$((issues+1))
+  fi
+  if [ -n "$helper_model" ] && [ -f "$helper_model" ]; then
+    doctor_row model_helper ok "$helper_model"
+  else
+    doctor_row model_helper fail "manage_ilongrun_model.py 缺失"
+    issues=$((issues+1))
+  fi
+  if [ -f "$HOME/.copilot/skills/ilongrun-model/SKILL.md" ]; then
+    doctor_row skill.ilongrun-model ok "$HOME/.copilot/skills/ilongrun-model"
+  else
+    doctor_row skill.ilongrun-model fail "未检测到 /ilongrun-model skill"
     issues=$((issues+1))
   fi
   if legacy_plugin_enabled; then
@@ -648,6 +695,12 @@ if [ "$subcmd" = "status" ]; then
   if [ -n "$helper" ]; then
     exec python3 "$helper" --workspace "$PWD" --run-id "${1:-latest}" --model-config "$MODEL_CONFIG_PATH"
   fi
+fi
+
+if [ "$subcmd" = "model" ]; then
+  helper="$(helper_path manage_ilongrun_model.py || true)"
+  [ -n "$helper" ] || die "model helper missing"
+  exec python3 "$helper" --workspace "$PWD" "$@"
 fi
 
 preflight_or_die

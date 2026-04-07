@@ -88,6 +88,7 @@ copilot_home = Path(sys.argv[1])
 known_skill_names = {
     "ilongrun",
     "ilongrun-coding",
+    "ilongrun-model",
     "ilongrun-prompt",
     "ilongrun-resume",
     "ilongrun-status",

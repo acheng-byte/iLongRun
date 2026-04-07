@@ -66,6 +66,7 @@ curl -fsSL https://raw.githubusercontent.com/izscc/iLongRun/main/install.sh | ba
 ```bash
 command -v ilongrun
 command -v ilongrun-coding
+command -v ilongrun-model
 ilongrun-doctor --refresh-model-cache
 ilongrun-doctor --notify-test
 ```
@@ -100,12 +101,28 @@ ilongrun-coding --model claude-haiku-4.5 "修一个小 bug，并补测试"
 
 也就是说，如果你传的是 `claude-haiku-4.5`，内部不会再静默切去别的更强模型。
 
+### 如果你想热切换后续新任务的默认主模型
+
+```bash
+ilongrun-model
+ilongrun-model claude-haiku-4.5
+ilongrun-model reset
+```
+
+这条命令的语义是：
+
+- 只影响**后续新启动**的 `ilongrun` / `ilongrun-coding`
+- 不会回写当前正在跑的 run
+- `resume` 仍优先继承目标 run 既有的 `selectedModel`
+- review roles / final audit 仍保持独立审查模板（默认 `gpt-5.4`）
+
 ## 7. 常用命令
 
 | 命令 | 作用 |
 |---|---|
 | `ilongrun "<任务>"` | 通用长跑入口，自动判断任务画像 |
 | `ilongrun-coding "<任务>"` | coding 专用入口，固定走 coding 生命周期 |
+| `ilongrun-model [<model>\|reset]` | 查看 / 切换后续新任务的默认主模型模板 |
 | `ilongrun-prompt "<任务>"` | 只生成策略骨架，不进入完整长跑 |
 | `ilongrun-status latest` | 查看最近一次 run 的中文状态看板 |
 | `ilongrun-resume latest` | 继续上一次 run |
@@ -181,7 +198,17 @@ coding 任务还要关注：
 - finalize 前后续衔接仍保持这个模型
 - 不会跨模型 fallback 到别的 slug
 
-### Q5：`/fleet` 一定会用吗？
+### Q5：`ilongrun-model` 和 `--model` 有什么区别？
+
+- `ilongrun-model`：改的是**默认模板**，影响后续新任务
+- `--model`：改的是**本次 run 的显式锁定模型**
+
+换句话说：
+
+- 想长期把默认主模型切到别的 slug，用 `ilongrun-model`
+- 想只让当前这一次 run 强制锁模，用 `--model`
+
+### Q6：`/fleet` 一定会用吗？
 
 不会。
 
@@ -193,5 +220,5 @@ coding 任务还要关注：
 - [架构与运行机制](./docs/架构与运行机制.md)
 - [项目全局审计与整改说明](./docs/项目全局审计与整改说明.md)
 - [内部命名清理说明](./docs/内部命名清理说明.md)
-- [发版说明 v0.7.1](./docs/发版说明-v0.7.1.md)
+- [发版说明 v0.8.0](./docs/发版说明-v0.8.0.md)
 - [更新日志](./CHANGELOG.md)

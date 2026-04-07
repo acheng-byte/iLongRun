@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 from _ilongrun_report_templates import build_final_review_template_markdown
+from _ilongrun_shared import default_model_config
 
 ROOT = Path(__file__).resolve().parent
 
@@ -146,6 +147,9 @@ def main() -> int:
         assert (prepared_scheduler.get("phaseGuards") or {}).get("claimVerification")
         assert (prepared_scheduler.get("reviewMatrix") or {}).get("gates")
         assert "gpt54-audit-reviewer" not in ((prepared_scheduler.get("mission") or {}).get("modelAllocation") or {})
+        assert (prepared_scheduler.get("mission") or {}).get("modelAllocation", {}).get("code-reviewer") == "gpt-5.4"
+        assert (prepared_scheduler.get("mission") or {}).get("modelAllocation", {}).get("test-engineer") == "gpt-5.4"
+        assert (prepared_scheduler.get("mission") or {}).get("modelAllocation", {}).get("security-auditor") == "gpt-5.4"
 
         explicit_workspace = temp_root / "explicit-model-workspace"
         explicit_workspace.mkdir(parents=True, exist_ok=True)
@@ -202,6 +206,193 @@ def main() -> int:
         assert model_info_explicit_payload["selected"] == "claude-haiku-4.5"
         assert model_info_explicit_payload["chain"] == ["claude-haiku-4.5"]
 
+        model_home = temp_root / "model-home"
+        install_config_path = model_home / "config" / "model-policy.jsonc"
+        install_config_path.parent.mkdir(parents=True, exist_ok=True)
+        install_policy = default_model_config()
+        install_policy["roleModels"]["code-reviewer"] = "claude-sonnet-4.6"
+        install_policy["roleModels"]["test-engineer"] = "claude-sonnet-4.6"
+        install_policy["roleModels"]["security-auditor"] = "claude-sonnet-4.6"
+        install_config_path.write_text(json.dumps(install_policy, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        fake_repo = temp_root / "fake-ilongrun-repo"
+        (fake_repo / "config").mkdir(parents=True, exist_ok=True)
+        (fake_repo / "plugin.json").write_text(json.dumps({"name": "ilongrun"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        repo_policy = default_model_config()
+        (fake_repo / "config" / "model-policy.jsonc").write_text(json.dumps(repo_policy, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        external_workspace = temp_root / "external-workspace"
+        external_workspace.mkdir(parents=True, exist_ok=True)
+        model_show = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(external_workspace),
+            "--json",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        model_show_payload = json.loads(model_show.stdout)
+        assert model_show_payload["repoDetected"] is False
+        assert len(model_show_payload["targets"]) == 1
+        assert model_show_payload["targets"][0]["scope"] == "install"
+        assert model_show_payload["skippedRepoPath"]
+
+        model_set = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(fake_repo),
+            "--json",
+            "claude-haiku-4.5",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        model_set_payload = json.loads(model_set.stdout)
+        assert model_set_payload["mode"] == "set"
+        assert model_set_payload["effectiveModel"] == "claude-haiku-4.5"
+        assert {item["scope"] for item in model_set_payload["targets"]} == {"install", "repo"}
+        install_after_set = read_json(install_config_path)
+        repo_after_set = read_json(fake_repo / "config" / "model-policy.jsonc")
+        for payload in (install_after_set, repo_after_set):
+            assert payload["commandDefaults"]["run"] == "claude-haiku-4.5"
+            assert payload["commandDefaults"]["coding"] == "claude-haiku-4.5"
+            assert payload["skillDefaults"]["ilongrun"] == "claude-haiku-4.5"
+            assert payload["skillDefaults"]["ilongrun-coding"] == "claude-haiku-4.5"
+            for role in ("mission-governor", "strategy-synthesizer", "phase-planner", "workstream-planner", "ledger-syncer", "executor", "recovery-agent"):
+                assert payload["roleModels"][role] == "claude-haiku-4.5"
+            for role in ("code-reviewer", "test-engineer", "security-auditor"):
+                assert payload["roleModels"][role] == "gpt-5.4"
+            assert payload["codingAuditModel"] == "gpt-5.4"
+            assert payload["roleModels"]["final-audit-reviewer"] == "gpt-5.4"
+            assert payload["commandDefaults"]["prompt"] == "claude-sonnet-4.6"
+            assert payload["commandDefaults"]["resume"] == "claude-sonnet-4.6"
+            assert payload["commandDefaults"]["status"] == "claude-sonnet-4.6"
+            assert payload["commandDefaults"]["doctor"] == "claude-sonnet-4.6"
+
+        bad_model = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(fake_repo),
+            "--json",
+            "definitely-unknown-model",
+            ok=False,
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        assert bad_model.returncode == 2
+        assert json.loads(bad_model.stdout)["ok"] is False
+
+        model_reset = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(fake_repo),
+            "--json",
+            "reset",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        model_reset_payload = json.loads(model_reset.stdout)
+        assert model_reset_payload["mode"] == "reset"
+        install_after_reset = read_json(install_config_path)
+        repo_after_reset = read_json(fake_repo / "config" / "model-policy.jsonc")
+        for payload in (install_after_reset, repo_after_reset):
+            assert payload["commandDefaults"]["run"] == "claude-sonnet-4.6"
+            assert payload["commandDefaults"]["coding"] == "claude-opus-4.6"
+            assert payload["skillDefaults"]["ilongrun"] == "claude-sonnet-4.6"
+            assert payload["skillDefaults"]["ilongrun-coding"] == "claude-opus-4.6"
+            assert payload["roleModels"]["mission-governor"] == "claude-sonnet-4.6"
+            assert payload["roleModels"]["executor"] == "claude-opus-4.6"
+            assert payload["roleModels"]["code-reviewer"] == "gpt-5.4"
+            assert payload["roleModels"]["test-engineer"] == "gpt-5.4"
+            assert payload["roleModels"]["security-auditor"] == "gpt-5.4"
+
+        model_cli = subprocess.run(
+            ["bash", str(ROOT / "copilot-ilongrun"), "model"],
+            capture_output=True,
+            text=True,
+            cwd=str(fake_repo),
+            env={**os.environ, "ILONGRUN_HOME": str(model_home)},
+        )
+        assert model_cli.returncode == 0
+        assert "iLongRun 主模型模板" in model_cli.stdout
+        assert "gpt-5.4" in model_cli.stdout
+
+        dry_env = {**os.environ, "ILONGRUN_HOME": str(model_home), "COPILOT_GITHUB_TOKEN": "test-token", "COPILOT_BIN": "python3"}
+        run_dry = subprocess.run(
+            ["bash", str(ROOT / "copilot-ilongrun"), "run", "--dry-run", "帮我写 README"],
+            capture_output=True,
+            text=True,
+            cwd=str(external_workspace),
+            env=dry_env,
+        )
+        assert run_dry.returncode == 0
+        assert "--model claude-sonnet-4.6" in run_dry.stdout
+        coding_dry = subprocess.run(
+            ["bash", str(ROOT / "copilot-ilongrun"), "coding", "--dry-run", "修一个 bug 并补测试"],
+            capture_output=True,
+            text=True,
+            cwd=str(external_workspace),
+            env=dry_env,
+        )
+        assert coding_dry.returncode == 0
+        assert "--model claude-opus-4.6" in coding_dry.stdout
+
+        resume_model_workspace = temp_root / "resume-model-workspace"
+        resume_model_workspace.mkdir(parents=True, exist_ok=True)
+        run(
+            str(ROOT / "prepare_ilongrun_run.py"),
+            "--workspace", str(resume_model_workspace),
+            "--task", "修一个小 bug 并补测试",
+            "--force-profile", "coding",
+            "--explicit-model", "claude-haiku-4.5",
+            "--session-model", "claude-haiku-4.5",
+            "--model-control-mode", "explicit-model-locked",
+        )
+        resume_dry = subprocess.run(
+            ["bash", str(ROOT / "copilot-ilongrun"), "resume", "--dry-run", "latest"],
+            capture_output=True,
+            text=True,
+            cwd=str(resume_model_workspace),
+            env=dry_env,
+        )
+        assert resume_dry.returncode == 0
+        assert "--model claude-haiku-4.5" in resume_dry.stdout
+
+        supervisor_coding_chain = run_inline(
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "import json",
+                    "import sys",
+                    f"sys.path.insert(0, {str(ROOT)!r})",
+                    "import launch_ilongrun_supervisor as sup",
+                    "from _ilongrun_shared import load_model_config, model_availability_snapshot",
+                    f"cfg = load_model_config({str(ROOT.parent / 'config' / 'model-policy.jsonc')!r})",
+                    "av = model_availability_snapshot(cfg, cache={'version': 1, 'accounts': {}})",
+                    "class Args:",
+                    "    explicit_model = None",
+                    "    mode = 'run'",
+                    "    force_profile = 'coding'",
+                    f"chain = sup.supervisor_model_chain(Args(), workspace=Path({str(explicit_workspace)!r}), run_ref={explicit_run_id!r}, payload='ignored', config=cfg, availability=av)",
+                    "print(json.dumps(chain, ensure_ascii=False))",
+                ]
+            )
+        )
+        assert json.loads(supervisor_coding_chain.stdout) == ["claude-haiku-4.5"]
+
+        supervisor_resume_chain = run_inline(
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "import json",
+                    "import sys",
+                    f"sys.path.insert(0, {str(ROOT)!r})",
+                    "import launch_ilongrun_supervisor as sup",
+                    "from _ilongrun_shared import load_model_config, model_availability_snapshot",
+                    f"cfg = load_model_config({str(ROOT.parent / 'config' / 'model-policy.jsonc')!r})",
+                    "av = model_availability_snapshot(cfg, cache={'version': 1, 'accounts': {}})",
+                    "class Args:",
+                    "    explicit_model = None",
+                    "    mode = 'resume'",
+                    "    force_profile = None",
+                    f"chain = sup.supervisor_model_chain(Args(), workspace=Path({str(resume_model_workspace)!r}), run_ref='latest', payload='latest', config=cfg, availability=av)",
+                    "print(json.dumps(chain, ensure_ascii=False))",
+                ]
+            )
+        )
+        assert json.loads(supervisor_resume_chain.stdout) == ["claude-haiku-4.5"]
+
         doctor_log = temp_root / "doctor.log"
         doctor_log.write_text(
             "\n".join(
@@ -237,6 +428,7 @@ def main() -> int:
                 [
                     "launcher.ilongrun\tok\t/tmp/ilongrun",
                     "launcher.ilongrun-coding\tok\t/tmp/ilongrun-coding",
+                    "launcher.ilongrun-model\tok\t/tmp/ilongrun-model",
                     "launcher.ilongrun-prompt\tok\t/tmp/ilongrun-prompt",
                     "launcher.ilongrun-resume\tok\t/tmp/ilongrun-resume",
                     "launcher.ilongrun-status\tok\t/tmp/ilongrun-status",
@@ -250,6 +442,8 @@ def main() -> int:
                     "coding_playbooks\tok\t/tmp/skills/ilongrun-coding",
                     "coding_agents\tok\t/tmp/agents",
                     "skill_lint\tok\t/tmp/lint_ilongrun_skills.py",
+                    "model_helper\tok\t/tmp/manage_ilongrun_model.py",
+                    "skill.ilongrun-model\tok\t/tmp/skills/ilongrun-model",
                     "legacy_plugin\tok\t未启用（copilot-mission-control）",
                     "workspace_legacy\tok\t未发现旧工作区残留",
                     "screen\tok\t/usr/bin/screen",

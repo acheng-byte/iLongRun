@@ -46,9 +46,9 @@
     "workstream-planner": "claude-sonnet-4.6",
     "ledger-syncer": "claude-sonnet-4.6",
     "executor": "claude-opus-4.6",
-    "code-reviewer": "claude-sonnet-4.6",
-    "test-engineer": "claude-sonnet-4.6",
-    "security-auditor": "claude-sonnet-4.6",
+    "code-reviewer": "gpt-5.4",
+    "test-engineer": "gpt-5.4",
+    "security-auditor": "gpt-5.4",
     "recovery-agent": "claude-sonnet-4.6",
     "final-audit-reviewer": "gpt-5.4"
   },

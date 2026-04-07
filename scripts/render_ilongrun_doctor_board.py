@@ -11,6 +11,7 @@ from _ilongrun_terminal_theme import ad_box, board_line, board_title, detail_lin
 EXPECTED_LAUNCHERS = [
     "ilongrun",
     "ilongrun-coding",
+    "ilongrun-model",
     "ilongrun-prompt",
     "ilongrun-resume",
     "ilongrun-status",

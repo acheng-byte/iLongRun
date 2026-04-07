@@ -56,6 +56,7 @@ sys.path.insert(0, str(scripts_dir))
 from _ilongrun_shared import read_jsonc, write_text_atomic  # type: ignore
 
 DEPRECATED = "gemini-3.1-pro"
+FIXED_REVIEW_ROLES = ("code-reviewer", "test-engineer", "security-auditor")
 
 source = read_jsonc(source_path, {})
 target = read_jsonc(target_path, {})
@@ -100,6 +101,16 @@ for field in ("commandDefaults", "skillDefaults", "roleModels"):
 if target.get("codingAuditModel") == DEPRECATED:
     target["codingAuditModel"] = source.get("codingAuditModel") or "gpt-5.4"
     changed = True
+
+role_models = dict(target.get("roleModels") or {})
+source_role_models = dict(source.get("roleModels") or {})
+for role in FIXED_REVIEW_ROLES:
+    desired = source_role_models.get(role)
+    if desired and role_models.get(role) != desired:
+        role_models[role] = desired
+        changed = True
+if role_models:
+    target["roleModels"] = role_models
 
 if changed:
     write_text_atomic(target_path, json.dumps(target, ensure_ascii=False, indent=2))
@@ -222,6 +233,7 @@ helpers=(
   lint_ilongrun_skills.py
   sync_ilongrun_ledger.py
   model_policy_info.py
+  manage_ilongrun_model.py
   probe_models.py
   probe_fleet_capability.py
   hook_event.py
@@ -237,6 +249,7 @@ shell_helpers=(
   copilot-ilongrun
   ilongrun
   ilongrun-coding
+  ilongrun-model
   ilongrun-prompt
   ilongrun-resume
   ilongrun-status
@@ -284,6 +297,7 @@ Done.
 
 You can now use these Copilot bare commands:
   /ilongrun
+  /ilongrun-model
   /ilongrun-prompt
   /ilongrun-resume
   /ilongrun-status
