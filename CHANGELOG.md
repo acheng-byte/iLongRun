@@ -23,6 +23,8 @@
 - **终审/裁决状态收敛**：`phase-audit` 负责最终终审与 release blocker，`phase-finalize` 负责完成态闭环，二者状态会反映在 status/plan/strategy 中
 - **doctor / launch / status 看板升级**：新增 coding protocol 版本、swarm active mode、review matrix / gate 状态展示
 - **安装器升级**：安装/卸载现在会同步处理 `coding-protocol.jsonc` 与 `vendor/agent-skills/`
+- **安装器热修并入 v0.6.0**：补齐缺失 helper / helper launchers，修复已安装 selftest 的 `ModuleNotFoundError`，安装看板新增版本号展示，并正确解析新版 doctor 中文看板
+- **模型策略清理**：移除默认配置里的 `Gemini 3.1 Pro`，安装时会自动清理历史 `model-policy.jsonc` 中残留的 `gemini-3.1-pro`
 
 ### 测试
 - `selftest_ilongrun.py` 已覆盖：
