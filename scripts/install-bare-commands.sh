@@ -131,6 +131,8 @@ fi
 helpers=(
   _ilongrun_shared.py
   _ilongrun_lib.py
+  _ilongrun_delivery_audit.py
+  _ilongrun_report_templates.py
   _ilongrun_terminal_theme.py
   render_ilongrun_doctor_board.py
   cleanup_legacy_workspace.py
@@ -149,6 +151,8 @@ helpers=(
   probe_models.py
   probe_fleet_capability.py
   hook_event.py
+  sync_ilongrun_ledger.py
+  render_ilongrun_install_board.py
 )
 
 for helper in "${helpers[@]}"; do
