@@ -1,5 +1,5 @@
 {
-  // iLongRun v0.4.0 模型策略单一真值源
+  // iLongRun v0.6.0 模型策略单一真值源
   // 选模优先级：
   // 1) 命令行显式 --model
   // 2) commandDefaults（命令默认模型）
@@ -17,7 +17,6 @@
   // | gpt-5.4            | GPT-5.4            | 最终终审、严谨审查、复杂推理      | 默认 audit |
   // | claude-haiku-4.5   | Claude Haiku 4.5   | 低成本短任务、轻量触发、快速恢复  | 官方支持，建议先 doctor/probe |
   // | gpt-5-mini         | GPT-5 mini         | 成本优先、简单整理、轻度问答      | 官方支持，建议先 doctor/probe |
-  // | gemini-3.1-pro     | Gemini 3.1 Pro     | 账号支持时的备用高能力模型        | fallback |
   //
   // 说明：
   // - README 中会区分“本机已通过 doctor/probe 验证”与“官方支持但需先验证”。
@@ -60,8 +59,7 @@
     "claude-sonnet-4.5",
     "gpt-5.4",
     "claude-haiku-4.5",
-    "gpt-5-mini",
-    "gemini-3.1-pro"
+    "gpt-5-mini"
   ],
   "backoffMinutes": [2, 5, 10],
   "availabilityTtlHours": 24,
@@ -72,8 +70,7 @@
     "claude-sonnet-4.5": "Claude Sonnet 4.5",
     "claude-haiku-4.5": "Claude Haiku 4.5",
     "gpt-5.4": "GPT-5.4",
-    "gpt-5-mini": "GPT-5 mini",
-    "gemini-3.1-pro": "Gemini 3.1 Pro"
+    "gpt-5-mini": "GPT-5 mini"
   },
   "aliases": {
     "claude opus 4.6": "claude-opus-4.6",
@@ -102,9 +99,6 @@
     "gpt 5 mini": "gpt-5-mini",
     "gpt-5 mini": "gpt-5-mini",
     "gpt5mini": "gpt-5-mini",
-    "gpt mini": "gpt-5-mini",
-    "gemini 3.1 pro": "gemini-3.1-pro",
-    "gemini-3.1-pro": "gemini-3.1-pro",
-    "gemini 3.1": "gemini-3.1-pro"
+    "gpt mini": "gpt-5-mini"
   }
 }

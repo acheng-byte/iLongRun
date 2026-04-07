@@ -8,6 +8,20 @@ COMMAND_BIN_DIR="$HOME/.local/bin"
 TMP_INSTALL_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ilongrun-install-flow.XXXXXX")"
 KEEP_INSTALL_LOGS=0
 COLOR_ENABLED=0
+ILONGRUN_VERSION="$(
+  python3 - "$ROOT_DIR/plugin.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    print("unknown")
+else:
+    print(data.get("version") or "unknown")
+PY
+)"
 
 if [ "${ILONGRUN_ENABLE_ANSI:-0}" = "1" ] && [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
   COLOR_ENABLED=1
@@ -75,7 +89,7 @@ trap cleanup EXIT
 intro_board() {
   printf '%s\n' "$(gold '╭─── ')$(brand_title) $(gold '────────────────────────')"
   printf '%s\n' "$(gold '│')"
-  printf '%s\n' "$(gold '│  ')欢迎使用 $(brand_word) 一键安装"
+  printf '%s\n' "$(gold '│  ')欢迎使用 $(brand_word) $(soft "v$ILONGRUN_VERSION") 一键安装"
   printf '%s\n' "$(gold '│  ')本次会先彻底清理旧 LongRun / iLongRun，再安装新版"
   printf '%s\n' "$(gold '│  ')你只需要等待安装完成，然后按提示开始使用即可。"
   printf '%s\n' "$(gold '│')"
@@ -195,4 +209,5 @@ python3 "$ROOT_DIR/scripts/render_ilongrun_install_board.py" \
   --doctor-exit-code "$doctor_status" \
   --command-bin-dir "$COMMAND_BIN_DIR" \
   --helper-dir "$ILONGRUN_HOME/bin" \
-  --model-config "$ILONGRUN_HOME/config/model-policy.jsonc"
+  --model-config "$ILONGRUN_HOME/config/model-policy.jsonc" \
+  --version "$ILONGRUN_VERSION"

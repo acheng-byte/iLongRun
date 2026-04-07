@@ -50,6 +50,7 @@ def assert_notify_target(payload: dict, expected: Path) -> None:
 def main() -> int:
     temp_root = Path(tempfile.mkdtemp(prefix="ilongrun-selftest-"))
     try:
+        helper_home = ROOT.parent if ROOT.name == "bin" else (temp_root / "ilongrun-home")
         review_template = build_final_review_template_markdown()
         assert "## Run Metadata" in review_template
         assert "### Must-Fix (Critical)" in review_template
@@ -129,10 +130,12 @@ def main() -> int:
             "--command-bin-dir", str(temp_root / "bin"),
             "--helper-dir", str(temp_root / "helpers"),
             "--model-config", str(ROOT.parent / "config" / "model-policy.jsonc"),
+            "--version", "0.6.0",
         )
         assert "知识船仓·公益社区" in install_board.stdout
         assert "倾力制作～" in install_board.stdout
         assert "====" in install_board.stdout
+        assert "v0.6.0" in install_board.stdout
 
         doctor_checks = temp_root / "doctor-checks.tsv"
         doctor_checks.write_text(
@@ -387,7 +390,7 @@ def main() -> int:
             capture_output=True,
             text=True,
             cwd=str(workspace),
-            env={**os.environ, "ILONGRUN_HOME": str(temp_root / "ilongrun-home")},
+            env={**os.environ, "ILONGRUN_HOME": str(helper_home)},
         )
         assert status_board.returncode == 0
         assert "状态看板" in status_board.stdout

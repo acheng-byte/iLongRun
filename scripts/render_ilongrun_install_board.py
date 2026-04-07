@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 
 from _ilongrun_terminal_theme import (
@@ -74,6 +75,21 @@ def parse_doctor_log(path: Path) -> dict[str, str | int]:
             info["legacy"] = "旧插件未启用"
         elif "legacy plugin still enabled" in line:
             info["legacy"] = "旧插件仍需手动处理"
+    if any("环境体检看板" in line for line in lines):
+        for line in lines:
+            normalized = re.sub(r"\s+", " ", line.strip())
+            if "👤 Copilot" in normalized:
+                info["login"] = normalized.split("👤 Copilot", 1)[1].strip()
+            elif "🧪 自检脚本" in normalized:
+                info["selftest"] = normalized.split("🧪 自检脚本", 1)[1].strip()
+                if "❌" in normalized:
+                    info["fail_count"] = max(int(info.get("fail_count", 0) or 0), 1)
+                elif "⚠️" in normalized:
+                    info["warn_count"] = max(int(info.get("warn_count", 0) or 0), 1)
+            elif "🚢 /fleet 能力" in normalized:
+                info["fleet"] = normalized.split("🚢 /fleet 能力", 1)[1].strip()
+            elif re.search(r"(?:旧插件|旧插件冲突)\s", normalized):
+                info["legacy"] = re.split(r"(?:旧插件|旧插件冲突)", normalized, maxsplit=1)[1].strip()
     return info
 
 
@@ -135,6 +151,7 @@ def main() -> int:
     parser.add_argument("--command-bin-dir", required=True)
     parser.add_argument("--helper-dir", required=True)
     parser.add_argument("--model-config", required=True)
+    parser.add_argument("--version", required=True)
     args = parser.parse_args()
 
     doctor_info = parse_doctor_log(Path(args.doctor_log))
@@ -147,9 +164,10 @@ def main() -> int:
     plugin_tone, plugin_text = plugin_status_label(args.plugin_status, args.plugin_source)
     doctor_tone, doctor_text = doctor_status_label(args.doctor_exit_code, doctor_info)
 
-    print(open_top(board_title("🛠️", "安装看板"), tail_width=26))
+    print(open_top(board_title("🛠️", f"安装看板 · v{args.version}"), tail_width=18))
     print(left_border())
     print(board_line("📦 安装状态", tone(install_tone, install_text)))
+    print(board_line("🏷️ 当前版本", tone("bright", f"iLongRun v{args.version}")))
     print(board_line("🧹 清理策略", tone("warm", "先彻底清理，再安装新版")))
     print(board_line("🔌 插件注册", tone(plugin_tone, plugin_text)))
     print(board_line("🧩 本地能力", tone("ok", "✅ skills / agents / helpers 已就绪")))

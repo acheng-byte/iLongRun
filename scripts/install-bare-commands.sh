@@ -39,6 +39,76 @@ install_copied_file() {
   cp "$source" "$target"
 }
 
+migrate_model_policy() {
+  local source_template="$1"
+  local target_config="$2"
+  [ -f "$target_config" ] || return 0
+  python3 - "$ROOT_DIR/scripts" "$source_template" "$target_config" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+scripts_dir = Path(sys.argv[1])
+source_path = Path(sys.argv[2])
+target_path = Path(sys.argv[3])
+sys.path.insert(0, str(scripts_dir))
+
+from _ilongrun_shared import read_jsonc, write_text_atomic  # type: ignore
+
+DEPRECATED = "gemini-3.1-pro"
+
+source = read_jsonc(source_path, {})
+target = read_jsonc(target_path, {})
+
+changed = False
+
+def sanitize_mapping(mapping, template=None):
+    global changed
+    result = dict(mapping or {})
+    for key, value in list(result.items()):
+        if value == DEPRECATED:
+            changed = True
+            replacement = (template or {}).get(key)
+            if replacement:
+                result[key] = replacement
+            else:
+                result.pop(key, None)
+    return result
+
+fallback = [item for item in (target.get("fallback") or []) if item != DEPRECATED]
+if fallback != list(target.get("fallback") or []):
+    target["fallback"] = fallback
+    changed = True
+
+display_names = dict(target.get("displayNames") or {})
+if display_names.pop(DEPRECATED, None) is not None:
+    target["displayNames"] = display_names
+    changed = True
+
+aliases = dict(target.get("aliases") or {})
+clean_aliases = {key: value for key, value in aliases.items() if value != DEPRECATED}
+if clean_aliases != aliases:
+    target["aliases"] = clean_aliases
+    changed = True
+
+for field in ("commandDefaults", "skillDefaults", "roleModels"):
+    cleaned = sanitize_mapping(target.get(field) or {}, source.get(field) or {})
+    if cleaned != (target.get(field) or {}):
+        target[field] = cleaned
+        changed = True
+
+if target.get("codingAuditModel") == DEPRECATED:
+    target["codingAuditModel"] = source.get("codingAuditModel") or "gpt-5.4"
+    changed = True
+
+if changed:
+    write_text_atomic(target_path, json.dumps(target, ensure_ascii=False, indent=2))
+    print("migrated")
+else:
+    print("noop")
+PY
+}
+
 HELPER_REFS_DIR="$ILONGRUN_HOME/references"
 mkdir -p "$TARGET_SKILLS_DIR" "$TARGET_AGENTS_DIR" "$HELPER_BIN_DIR" "$HELPER_CONFIG_DIR" "$HELPER_REFS_DIR" "$HELPER_VENDOR_DIR"
 
@@ -130,10 +200,13 @@ if [ -d "$ROOT_DIR/references" ]; then
 fi
 
 helpers=(
+  _ilongrun_delivery_audit.py
   _ilongrun_shared.py
   _ilongrun_lib.py
+  _ilongrun_report_templates.py
   _ilongrun_terminal_theme.py
   render_ilongrun_doctor_board.py
+  render_ilongrun_install_board.py
   cleanup_legacy_workspace.py
   notify_macos.py
   prepare_ilongrun_run.py
@@ -146,6 +219,7 @@ helpers=(
   finalize_ilongrun_run.py
   launch_ilongrun_supervisor.py
   selftest_ilongrun.py
+  sync_ilongrun_ledger.py
   model_policy_info.py
   probe_models.py
   probe_fleet_capability.py
@@ -156,6 +230,22 @@ for helper in "${helpers[@]}"; do
   install_copied_file "$ROOT_DIR/scripts/$helper" "$HELPER_BIN_DIR/$helper"
   chmod +x "$HELPER_BIN_DIR/$helper"
   printf 'Installed helper: %s\n' "$HELPER_BIN_DIR/$helper"
+done
+
+shell_helpers=(
+  copilot-ilongrun
+  ilongrun
+  ilongrun-coding
+  ilongrun-prompt
+  ilongrun-resume
+  ilongrun-status
+  ilongrun-doctor
+)
+
+for helper in "${shell_helpers[@]}"; do
+  install_copied_file "$ROOT_DIR/scripts/$helper" "$HELPER_BIN_DIR/$helper"
+  chmod +x "$HELPER_BIN_DIR/$helper"
+  printf 'Installed helper launcher: %s\n' "$HELPER_BIN_DIR/$helper"
 done
 
 maybe_install_terminal_notifier
@@ -169,6 +259,10 @@ elif [ -f "$HELPER_CONFIG_DIR/model-policy.json" ]; then
 else
   install_copied_file "$ROOT_DIR/config/model-policy.jsonc" "$HELPER_CONFIG_DIR/model-policy.jsonc"
   printf 'Installed model policy: %s\n' "$HELPER_CONFIG_DIR/model-policy.jsonc"
+fi
+migration_result="$(migrate_model_policy "$ROOT_DIR/config/model-policy.jsonc" "$HELPER_CONFIG_DIR/model-policy.jsonc" || true)"
+if [ "$migration_result" = "migrated" ]; then
+  printf 'Sanitized deprecated model entries in: %s\n' "$HELPER_CONFIG_DIR/model-policy.jsonc"
 fi
 if [ ! -f "$HELPER_CONFIG_DIR/model-availability.json" ]; then
   install_copied_file "$ROOT_DIR/config/model-availability.json" "$HELPER_CONFIG_DIR/model-availability.json"

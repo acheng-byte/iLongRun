@@ -23,7 +23,6 @@ KNOWN_MODEL_DISPLAY = {
     "claude-haiku-4.5": "Claude Haiku 4.5",
     "gpt-5.4": "GPT-5.4",
     "gpt-5-mini": "GPT-5 mini",
-    "gemini-3.1-pro": "Gemini 3.1 Pro",
 }
 MODEL_ALIASES = {
     "claude opus 4.6": "claude-opus-4.6",
@@ -53,9 +52,6 @@ MODEL_ALIASES = {
     "gpt-5 mini": "gpt-5-mini",
     "gpt5mini": "gpt-5-mini",
     "gpt mini": "gpt-5-mini",
-    "gemini 3.1 pro": "gemini-3.1-pro",
-    "gemini-3.1-pro": "gemini-3.1-pro",
-    "gemini 3.1": "gemini-3.1-pro",
 }
 RATE_LIMIT_PATTERNS = [
     r"user_model_rate_limited",
@@ -266,7 +262,6 @@ def default_model_config() -> dict[str, Any]:
             "gpt-5.4",
             "claude-haiku-4.5",
             "gpt-5-mini",
-            "gemini-3.1-pro",
         ],
         "backoffMinutes": [2, 5, 10],
         "availabilityTtlHours": 24,
