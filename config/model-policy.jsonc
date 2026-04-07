@@ -45,6 +45,7 @@
     "strategy-synthesizer": "claude-sonnet-4.6",
     "phase-planner": "claude-sonnet-4.6",
     "workstream-planner": "claude-sonnet-4.6",
+    "ledger-syncer": "claude-sonnet-4.6",
     "executor": "claude-opus-4.6",
     "recovery-agent": "claude-sonnet-4.6",
     "gpt54-audit-reviewer": "gpt-5.4"

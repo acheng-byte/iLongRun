@@ -10,42 +10,35 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from _ilongrun_report_templates import build_completion_report_markdown
 from _ilongrun_lib import (
     completion_path,
     final_review_path,
+    persist_run_ledger,
     reconcile_scheduler,
     resolve_run_target,
-    scheduler_path,
-    sync_projections,
     verify_scheduler,
-    write_json_atomic,
     write_text_atomic,
 )
 
 
 def build_completion_markdown(sched: dict, headline: str, status_name: str, verification_items: list[str], blockers: list[str]) -> str:
-    lines = [
-        "# ILongRun Completion Summary",
-        "",
-        f"- Status: `{status_name}`",
-        f"- Headline: {headline}",
-        "",
-        "## Deliverables",
-    ]
-    deliverables = sched.get("deliverables") or []
-    if deliverables:
-        lines.extend(f"- `{item}`" for item in deliverables)
-    else:
-        lines.append("- None recorded")
-    lines.extend(["", "## Verification"])
-    if verification_items:
-        lines.extend(f"- {item}" for item in verification_items)
-    else:
-        lines.append("- No explicit verification notes")
-    if blockers:
-        lines.extend(["", "## Blockers"])
-        lines.extend(f"- {item}" for item in blockers)
-    return "\n".join(lines) + "\n"
+    verification = sched.get("verification") or {}
+    reviews = sched.get("reviews") or {}
+    return build_completion_report_markdown(
+        run_id=str(sched.get("runId") or ""),
+        status_name=status_name,
+        profile=str(sched.get("profile") or "unknown"),
+        selected_model=str(sched.get("selectedModel") or "unknown"),
+        headline=headline,
+        verification_state=str(verification.get("state") or "pending"),
+        review_status=str(reviews.get("status") or "not-required"),
+        adjudication_status=str(reviews.get("adjudicationStatus") or "not-required"),
+        completion_score=verification.get("completionScore") or {},
+        deliverables=list(sched.get("deliverables") or []),
+        verification_items=verification_items,
+        blockers=blockers,
+    )
 
 
 def notify(target, event: str, *, title: str, subtitle: str, message: str, open_path: Path | None = None, sound: bool = False) -> None:
@@ -105,11 +98,15 @@ def main() -> int:
             "recommendedAction": verification.get("recommendedAction"),
             "failureClass": verification.get("failureClass"),
             "lastVerifiedAt": __import__('datetime').datetime.utcnow().replace(microsecond=0).isoformat() + 'Z',
+            "completionScore": verification.get("completionScore"),
         }
         sched["summary"] = args.headline
-        sched["updatedAt"] = __import__('datetime').datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
-        sync_projections(target, sched)
-        write_json_atomic(scheduler_path(target), sched)
+        persist_run_ledger(
+            target,
+            sched,
+            reason="finalize-precheck-failed",
+            actor="ledger-syncer",
+        )
         notify(
             target,
             "attention",
@@ -133,12 +130,17 @@ def main() -> int:
         "recommendedAction": verification.get("recommendedAction"),
         "failureClass": verification.get("failureClass"),
         "lastVerifiedAt": __import__('datetime').datetime.utcnow().replace(microsecond=0).isoformat() + 'Z',
+        "completionScore": verification.get("completionScore"),
     }
     if sched.get("profile") == "coding":
         sched.setdefault("reviews", {})["status"] = "passed" if int((sched.get("reviews") or {}).get("pendingMustFixCount") or 0) == 0 else "failed"
-    sched["updatedAt"] = __import__('datetime').datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
-    sync_projections(target, sched)
-    write_json_atomic(scheduler_path(target), sched)
+    sched, _ = persist_run_ledger(
+        target,
+        sched,
+        reason=f"finalize-{args.status}",
+        actor="ledger-syncer",
+        clean_active_on_complete=args.status == "complete",
+    )
     completion_file = completion_path(target)
     write_text_atomic(completion_file, build_completion_markdown(sched, args.headline, args.status, args.verification_item, args.blocker))
     if args.status == "complete":

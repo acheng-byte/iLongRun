@@ -38,3 +38,19 @@ DEFINE → PLAN → BUILD → VERIFY → REVIEW → SHIP
 3. 若 accept 任何 must-fix → 指定返工 workstream + 责任模型
 4. 若全部 must-fix 已解决 → 可以进入 finalize
 5. 裁决结果写入 `reviews/adjudication.md`
+
+## `reviews/adjudication.md` 固定结构
+
+```markdown
+# ILongRun Adjudication
+
+## Run Metadata
+## Summary
+## Findings Intake
+### Must-Fix
+### Should-Fix
+### Residual Risks / Deferred Items
+## Decision
+## Next Actions
+## Verdict
+```

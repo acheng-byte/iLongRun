@@ -9,7 +9,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from _ilongrun_lib import reconcile_scheduler, resolve_run_target, scheduler_path, sync_projections, verify_scheduler, write_json_atomic
+from _ilongrun_lib import persist_run_ledger, reconcile_scheduler, resolve_run_target
 
 
 def main() -> int:
@@ -21,18 +21,14 @@ def main() -> int:
 
     target = resolve_run_target(args.workspace, args.run_id)
     sched = reconcile_scheduler(target)
-    verification = verify_scheduler(target, sched)
-    sched["verification"] = {
-        "state": "passed" if verification.get("ok") else "failed",
-        "hardFailures": verification.get("hardFailures", []),
-        "softWarnings": verification.get("softWarnings", []),
-        "driftFindings": verification.get("driftFindings", []),
-        "recommendedAction": verification.get("recommendedAction"),
-        "failureClass": verification.get("failureClass"),
-        "lastVerifiedAt": __import__('datetime').datetime.utcnow().replace(microsecond=0).isoformat() + 'Z',
-    }
-    sync_projections(target, sched)
-    write_json_atomic(scheduler_path(target), sched)
+    sched, _verification = persist_run_ledger(
+        target,
+        sched,
+        reason="reconcile-cli",
+        actor="ledger-syncer",
+        verify=True,
+        clean_active_on_complete=True,
+    )
     result = {"ok": True, "runId": target.run_id, "state": sched.get("state"), "phase": sched.get("phase"), "completedWorkstreams": sched.get("completedWorkstreams"), "verification": sched.get("verification")}
     if args.do_print:
         print(json.dumps(result, ensure_ascii=False, indent=2))

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -16,14 +17,13 @@ from _ilongrun_lib import (
     final_review_path,
     journal_path,
     load_model_config,
+    persist_run_ledger,
     read_model_availability_for_ilongrun,
     reconcile_scheduler,
     resolve_run_target,
     runnable_fleet_waves,
     scheduler_path,
-    sync_projections,
     verify_scheduler,
-    write_json_atomic,
 )
 from _ilongrun_shared import (
     append_jsonl,
@@ -54,6 +54,42 @@ FLEET_UNSUPPORTED_SNIPPETS = [
     "unknown slash command",
     "not a valid command",
 ]
+
+
+def record_fleet_dispatch_event(
+    sched: dict[str, object],
+    *,
+    wave_id: str,
+    outcome: str,
+    reason: str,
+    model: str | None = None,
+    rc: int | None = None,
+    fallback_reason: str | None = None,
+    backend_before: str | None = None,
+    backend_after: str | None = None,
+) -> None:
+    runtime = sched.get("runtime") or {}
+    fleet_dispatch = runtime.get("fleetDispatch") or {}
+    events = list(fleet_dispatch.get("dispatchEvents") or [])
+    observed_at = now_iso()
+    record = {
+        "waveId": wave_id,
+        "outcome": outcome,
+        "reason": reason,
+        "observedAt": observed_at,
+        "model": model,
+        "rc": rc,
+        "fallbackReason": fallback_reason,
+        "backendBefore": backend_before,
+        "backendAfter": backend_after,
+    }
+    events.append({key: value for key, value in record.items() if value not in {None, ""}})
+    fleet_dispatch["dispatchEvents"] = events[-24:]
+    fleet_dispatch["lastDispatchedWave"] = wave_id
+    fleet_dispatch["lastOutcome"] = outcome
+    fleet_dispatch["lastOutcomeAt"] = observed_at
+    runtime["fleetDispatch"] = fleet_dispatch
+    sched["runtime"] = runtime
 
 
 def build_command(args, skill_ref: str, payload: str, model: str) -> list[str]:
@@ -153,12 +189,26 @@ def probe_fleet_capability(args, model: str) -> dict[str, object]:
     return {"ok": False, "status": "unknown", "reason": f"probe-exit-{proc.returncode}", "rawOutput": proc.stdout or proc.stderr}
 
 
-def set_wave_backend(workspace: Path, run_ref: str, wave_id: str, backend: str, reason: str, dispatch_key: str) -> None:
+def set_wave_backend(
+    workspace: Path,
+    run_ref: str,
+    wave_id: str,
+    backend: str,
+    reason: str,
+    dispatch_key: str,
+    *,
+    outcome: str | None = None,
+    model: str | None = None,
+    rc: int | None = None,
+    fallback_reason: str | None = None,
+) -> None:
     target = resolve_run_target(workspace, run_ref)
     sched = reconcile_scheduler(target)
+    previous_backend = None
     for phase in sched.get("phases") or []:
         for wave in phase.get("waves") or []:
             if wave.get("id") == wave_id:
+                previous_backend = str(wave.get("backend") or "")
                 wave["backend"] = backend
                 wave["reason"] = reason
                 break
@@ -171,8 +221,23 @@ def set_wave_backend(workspace: Path, run_ref: str, wave_id: str, backend: str, 
     fleet_dispatch["lastDispatchedWave"] = wave_id
     runtime["fleetDispatch"] = fleet_dispatch
     sched["runtime"] = runtime
-    sync_projections(target, sched)
-    write_json_atomic(scheduler_path(target), sched)
+    record_fleet_dispatch_event(
+        sched,
+        wave_id=wave_id,
+        outcome=outcome or ("completed" if dispatch_key == "completedWaves" else "degraded"),
+        reason=reason,
+        model=model,
+        rc=rc,
+        fallback_reason=fallback_reason,
+        backend_before=previous_backend,
+        backend_after=backend,
+    )
+    persist_run_ledger(
+        target,
+        sched,
+        reason=f"fleet-wave-backend:{wave_id}:{backend}",
+        actor="ledger-syncer",
+    )
 
 
 def update_fleet_runtime(workspace: Path, run_ref: str, probe_result: dict[str, object]) -> None:
@@ -184,15 +249,51 @@ def update_fleet_runtime(workspace: Path, run_ref: str, probe_result: dict[str, 
         return
     sched = reconcile_scheduler(target)
     runtime = sched.get("runtime") or {}
+    raw_output = str(probe_result.get("rawOutput") or "")
     runtime["fleetCapability"] = {
         "status": probe_result.get("status", "unknown"),
         "reason": probe_result.get("reason", "not-probed"),
         "checkedAt": probe_result.get("checkedAt"),
         "probeModel": probe_result.get("probeModel"),
+        "probeModelDisplay": probe_result.get("probeModelDisplay"),
+        "cache": probe_result.get("cache"),
+        "source": "probe_fleet_capability.py",
+        "checkedBy": "launch_ilongrun_supervisor.py",
+        "rawOutputDigest": hashlib.sha256(raw_output.encode("utf-8")).hexdigest()[:16] if raw_output else None,
     }
     sched["runtime"] = runtime
-    sync_projections(target, sched)
-    write_json_atomic(scheduler_path(target), sched)
+    persist_run_ledger(
+        target,
+        sched,
+        reason="fleet-runtime-updated",
+        actor="ledger-syncer",
+    )
+
+
+def mark_fleet_dispatch_started(workspace: Path, run_ref: str, wave_id: str, model: str) -> None:
+    target = resolve_run_target(workspace, run_ref)
+    sched = reconcile_scheduler(target)
+    current_backend = None
+    for phase in sched.get("phases") or []:
+        for wave in phase.get("waves") or []:
+            if wave.get("id") == wave_id:
+                current_backend = str(wave.get("backend") or "")
+                break
+    record_fleet_dispatch_event(
+        sched,
+        wave_id=wave_id,
+        outcome="dispatch-started",
+        reason="supervisor started fleet wave dispatch",
+        model=model,
+        backend_before=current_backend,
+        backend_after=current_backend,
+    )
+    persist_run_ledger(
+        target,
+        sched,
+        reason=f"fleet-dispatch-start:{wave_id}",
+        actor="ledger-syncer",
+    )
 
 
 def build_fleet_wave_prompt(run_ref: str, wave: dict[str, object], workstreams: list[dict[str, object]]) -> str:
@@ -241,7 +342,17 @@ def dispatch_fleet_waves(args, workspace: Path, run_ref: str, model: str) -> boo
         for item in pending:
             wave = item["wave"]
             reason = f"/fleet unavailable; downgraded to internal ({probe_result.get('reason', 'unknown')})"
-            set_wave_backend(workspace, run_ref, str(wave.get("id")), "internal", reason, "degradedWaves")
+            set_wave_backend(
+                workspace,
+                run_ref,
+                str(wave.get("id")),
+                "internal",
+                reason,
+                "degradedWaves",
+                outcome="degraded",
+                model=model,
+                fallback_reason=str(probe_result.get("reason") or "unknown"),
+            )
             append_journal_event(workspace, run_ref, "fleet-degraded", {"waveId": wave.get("id"), "reason": reason})
         return True
 
@@ -251,6 +362,7 @@ def dispatch_fleet_waves(args, workspace: Path, run_ref: str, model: str) -> boo
         workstreams = item["workstreams"]
         prompt = build_fleet_wave_prompt(run_ref, wave, workstreams)
         cmd = build_fleet_command(args, prompt, model)
+        mark_fleet_dispatch_started(workspace, run_ref, str(wave.get("id")), model)
         rc, output = run_and_stream(cmd, workspace, {
             "LONGRUN_SELECTED_MODEL": model,
             "LONGRUN_MODEL_CONTROL_MODE": "launcher-enforced",
@@ -275,10 +387,31 @@ def dispatch_fleet_waves(args, workspace: Path, run_ref: str, model: str) -> boo
                 reason = f"fleet wave fallback: {detect_fallback_reason(output)}"
             elif rc != 0:
                 reason = f"fleet wave exited with rc={rc}"
-            set_wave_backend(workspace, run_ref, str(wave.get("id")), "internal", reason, "degradedWaves")
+            set_wave_backend(
+                workspace,
+                run_ref,
+                str(wave.get("id")),
+                "internal",
+                reason,
+                "degradedWaves",
+                outcome="degraded",
+                model=model,
+                rc=rc,
+                fallback_reason=detect_fallback_reason(output),
+            )
             append_journal_event(workspace, run_ref, "fleet-degraded", {"waveId": wave.get("id"), "reason": reason})
         else:
-            set_wave_backend(workspace, run_ref, str(wave.get("id")), "fleet", str(wave.get("reason")), "completedWaves")
+            set_wave_backend(
+                workspace,
+                run_ref,
+                str(wave.get("id")),
+                "fleet",
+                str(wave.get("reason")),
+                "completedWaves",
+                outcome="completed",
+                model=model,
+                rc=rc,
+            )
             append_journal_event(workspace, run_ref, "fleet-complete", {"waveId": wave.get("id")})
         changed = True
     return changed
@@ -315,14 +448,24 @@ def patch_scheduler(workspace: Path, run_ref: str | None, *, selected_model: str
         sched["modelControlMode"] = "launcher-enforced"
         history = list(sched.get("modelAttemptHistory") or [])
         history.append({
-            "ts": sched.get("updatedAt"),
+            "ts": now_iso(),
             "model": selected_model,
             "reason": fallback_reason or note or "launcher-attempt",
         })
         sched["modelAttemptHistory"] = history[-12:]
     if fallback_reason:
         sched["fallbackReason"] = fallback_reason
-    write_json_atomic(scheduler_path(target), sched)
+    sync_reason = "launcher-scheduler-patch"
+    if fallback_reason:
+        sync_reason = f"launcher-fallback:{fallback_reason}"
+    elif selected_model:
+        sync_reason = f"launcher-model-selected:{selected_model}"
+    persist_run_ledger(
+        target,
+        sched,
+        reason=sync_reason,
+        actor="ledger-syncer",
+    )
 
 
 def notify_event(workspace: Path, run_ref: str | None, event: str, *, title: str, subtitle: str, message: str, sound: bool = False) -> None:
@@ -424,8 +567,12 @@ def maybe_run_gpt54_audit(args, workspace: Path, run_ref: str) -> bool:
     if detect_fallback_reason(output):
         return False
     refreshed = reconcile_scheduler(target)
-    sync_projections(target, refreshed)
-    write_json_atomic(scheduler_path(target), refreshed)
+    persist_run_ledger(
+        target,
+        refreshed,
+        reason="final-audit-refresh",
+        actor="ledger-syncer",
+    )
     return True
 
 

@@ -1,5 +1,41 @@
 # 更新日志
 
+## v0.5.0
+
+账本一致性与动态投影同步补强：修复 finalize/verifier/task-list 契约错位，引入确定性 ledger sync，并补上对已完成 run 的状态清理。
+
+### 修复
+- **finalize/verifier 契约统一**：不再强依赖 `workstreams[*].index`；历史 run 缺失 `index` 时也能安全 verify / sync
+- **run 完成态清理**：`finalize_ilongrun_run.py` 完成后会清理 `active-run-id`，`hook_event.py` 也会拒绝继续向已完成 run 追加 hook 事件
+- **完成态兼容**：统一识别 `complete / completed / finalized`，避免已完成 run 因状态枚举差异漏清理、漏告警
+- **终审解析修复**：`parse_review_sections()` 现在会正确把 `- None.` 识别为“无 must-fix”，不再误判 review 失败
+
+### 新增
+- **`sync_ilongrun_ledger.py`**：确定性对账脚本，可从 `scheduler.json + workstreams/*/status.json` 重建 `plan.md / task-list-N.md` 投影并清理 stale `active-run-id`
+- **`scan_ilongrun_delivery_gaps.py`**：新增 JS/TS 交付缺口扫描器，自动识别未接主链模块、重名核心模块、noop provider，并把结果写入 `reviews/delivery-audit.md`
+- **真实完成度评分**：verify/finalize 新增 `completionScore`，输出 `codeExists / wiredIntoEntry / tested / runtimeValidated` 四层 evidence-based 分数
+- **`render_ilongrun_status_board.py`**：新增本地确定性状态看板，统一展示 completion score、delivery verdict、ledger/projection 状态与风险摘要
+- **动态 task-list 勾选**：`task-list-N.md` 的 `[x] / [ ]` 改为由结构化 checklist 状态回写，不再永远停留在空勾选模板
+- **`scheduler.taskLists[]` 契约**：为 task-list 投影提供显式索引，减少 verifier 与 projection 之间的隐式猜测
+- **`Ledger Syncer` 角色**：新增专责角色说明与默认模型映射，明确“确定性脚本优先，子代理兜底”的同步策略
+
+### 增强
+- **漂移探测**：verify 现在会识别 `mission.md / plan.md` 状态漂移、`active-run-id` 残留、`completedAt < startedAt`、task-list 映射缺失等问题
+- **假完成拦截**：coding verify 现在会把高置信度 delivery audit 结果升级为 drift finding，直接阻断“模块存在但未接主链”的账面完工
+- **计划/完成摘要可见性**：`plan.md` 与 `COMPLETION.md` 会直接展示 completion score，方便快速识别“代码多但接线差”的 run
+- **状态查看体验统一**：`ilongrun-status` 优先走本地 helper，不再依赖模型生成中文看板；风格与 install / doctor / launch 看板保持一致
+- **reconcile 先补投影再 verify**：`reconcile_ilongrun_run.py` / `sync_ilongrun_ledger.py` 先重建投影再校验，减少“明明能修却先报错”的假失败
+- **报告模板统一**：review / adjudication / completion 收敛到统一章节骨架，并修复 `## Verdict` 被误算进 residual risks 的解析漂移
+- **`/fleet` 运行证据链**：新增 `fleetCapability` 的 probe 证据字段与 `fleetDispatch.dispatchEvents[]`，并在 verify / status board 中展示 completed/degraded/probe 证据
+
+### 测试
+- selftest 新增覆盖：
+  - finalize 后自动清理 `active-run-id`
+  - hook 不再写入已完成 run
+  - 缺失 `taskLists[]` / `index` 的 run 仍可成功 sync
+  - task-list 复选框自动从 `[ ]` 更新为 `[x]`
+  - 非法时间戳顺序会被标记为 drift
+
 ## v0.4.0
 
 run 协议统一化与模型配置化：修复 split-run 漂移、清除旧 `copilot-mission-control` 污染路径，并把默认模型收敛到单一 JSONC 配置。

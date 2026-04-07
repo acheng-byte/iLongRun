@@ -18,13 +18,12 @@ from _ilongrun_lib import (
     mint_run_id,
     model_availability_snapshot,
     read_model_availability_for_ilongrun,
+    persist_run_ledger,
     resolve_run_target,
     scheduler_path,
     set_active_run,
     set_latest_run,
-    sync_projections,
     workstreams_dir,
-    write_json_atomic,
 )
 
 
@@ -72,8 +71,7 @@ def main() -> int:
         scheduler["launcherMode"] = args.launcher_mode
     scheduler["runId"] = target.run_id
     scheduler["updatedAt"] = scheduler.get("updatedAt")
-    sync_projections(target, scheduler)
-    write_json_atomic(scheduler_path(target), scheduler)
+    persist_run_ledger(target, scheduler, reason="run-prepared", actor="ledger-syncer")
     append_jsonl(journal_path(target), {"ts": scheduler.get("createdAt"), "source": "helper", "event": "run-prepared", "payload": {"runId": target.run_id, "launcherMode": args.launcher_mode}})
 
     result = {

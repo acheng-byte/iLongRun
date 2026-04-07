@@ -16,14 +16,13 @@ from _ilongrun_lib import (
     load_model_config,
     model_availability_snapshot,
     parse_json_argument,
+    persist_run_ledger,
     read_model_availability_for_ilongrun,
     reconcile_scheduler,
     resolve_run_target,
     scheduler_path,
     shallow_merge,
-    sync_projections,
     workstream_by_id,
-    write_json_atomic,
 )
 
 
@@ -77,8 +76,12 @@ def main() -> int:
                     break
     payload = reconcile_scheduler(target, ensure_scheduler_defaults(payload))
     payload["runId"] = target.run_id
-    sync_projections(target, payload)
-    write_json_atomic(scheduler_path(target), payload)
+    payload, _ = persist_run_ledger(
+        target,
+        payload,
+        reason="scheduler-write-cli",
+        actor="ledger-syncer",
+    )
     if args.do_print:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0

@@ -137,9 +137,11 @@ helpers=(
   notify_macos.py
   prepare_ilongrun_run.py
   render_ilongrun_launch_board.py
+  render_ilongrun_status_board.py
   write_ilongrun_scheduler.py
   reconcile_ilongrun_run.py
   verify_ilongrun_run.py
+  scan_ilongrun_delivery_gaps.py
   finalize_ilongrun_run.py
   launch_ilongrun_supervisor.py
   selftest_ilongrun.py

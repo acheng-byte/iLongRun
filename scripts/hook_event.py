@@ -33,20 +33,24 @@ def main() -> int:
     run_id = read_text(active_path, '').strip() if active_path.exists() else ''
     if run_id:
         run_dir = base / 'runs' / run_id
-        append_jsonl(run_dir / 'hook-events.jsonl', record)
-        if event == 'errorOccurred':
-            scheduler_path = run_dir / 'scheduler.json'
-            scheduler = read_json(scheduler_path, {})
-            scheduler['lastError'] = {
-                'ts': record['ts'],
-                'event': event,
-                'message': data.get('message') or data.get('error') or json.dumps(data, ensure_ascii=False),
-            }
-            recovery = dict(scheduler.get('recoveryState') or {})
-            recovery['lastErrorTs'] = record['ts']
-            scheduler['recoveryState'] = recovery
-            scheduler['updatedAt'] = now_iso()
-            write_json_atomic(scheduler_path, scheduler)
+        scheduler_path = run_dir / 'scheduler.json'
+        scheduler = read_json(scheduler_path, {})
+        if str(scheduler.get('state') or '').lower() in {'complete', 'completed', 'finalized'}:
+            active_path.unlink(missing_ok=True)
+            run_id = ''
+        else:
+            append_jsonl(run_dir / 'hook-events.jsonl', record)
+            if event == 'errorOccurred':
+                scheduler['lastError'] = {
+                    'ts': record['ts'],
+                    'event': event,
+                    'message': data.get('message') or data.get('error') or json.dumps(data, ensure_ascii=False),
+                }
+                recovery = dict(scheduler.get('recoveryState') or {})
+                recovery['lastErrorTs'] = record['ts']
+                scheduler['recoveryState'] = recovery
+                scheduler['updatedAt'] = now_iso()
+                write_json_atomic(scheduler_path, scheduler)
 
     if event != 'preToolUse' or not run_id:
         return 0

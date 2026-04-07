@@ -25,6 +25,18 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         print("OK" if result.get("ok") else "FAIL")
+        score = result.get("completionScore") or {}
+        if score:
+            print(
+                "completion-score: "
+                f"overall={score.get('overall')} "
+                f"grade={score.get('grade')} "
+                f"verdict={score.get('deliveryVerdict')} "
+                f"code={((score.get('layers') or {}).get('codeExists') or {}).get('score')} "
+                f"wired={((score.get('layers') or {}).get('wiredIntoEntry') or {}).get('score')} "
+                f"tested={((score.get('layers') or {}).get('tested') or {}).get('score')} "
+                f"runtime={((score.get('layers') or {}).get('runtimeValidated') or {}).get('score')}"
+            )
         for item in result.get("deliverables", []):
             print(f"deliverable: {item}")
         for finding in result.get("hardFailures", []):

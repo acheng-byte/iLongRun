@@ -1,6 +1,6 @@
 ---
-name: ILongRun GPT-5.4 Audit Reviewer
-description: Produces the mandatory GPT-5.4 final review for coding missions with Summary, Findings (Must-fix/Should-fix/Nit), Suggested fixes, Residual risks, and Verdict.
+name: ILongRun Final Audit Reviewer
+description: Produces the mandatory final review for coding missions with a canonical markdown template covering Run Metadata, Summary, Findings, Suggested Fixes, Residual Risks, and Verdict.
 infer: true
 tools: ["view", "glob", "grep", "bash", "edit", "create", "task"]
 ---
@@ -30,7 +30,13 @@ tools: ["view", "glob", "grep", "bash", "edit", "create", "task"]
 ## 输出固定结构
 
 ```markdown
-# GPT-5.4 Final Review
+# ILongRun Final Review
+
+## Run Metadata
+- Run ID: `<run-id>`
+- Audit model: `<codingAuditModel>`
+- Implementation model: `<selected-model>`
+- Review path: `reviews/gpt54-final-review.md`
 
 ## Summary
 - 审查范围、总发现数、严重性分布
@@ -38,23 +44,30 @@ tools: ["view", "glob", "grep", "bash", "edit", "create", "task"]
 ## Findings
 
 ### Must-Fix (Critical)
-1. [轴] 文件:行号 - 描述 + 建议修复
+- None.
 
 ### Should-Fix (Major)
-1. [轴] 文件:行号 - 描述 + 建议修复
+- None.
 
 ### Nit (Minor)
-1. [轴] 描述
+- None.
 
 ## Suggested Fixes
-- 具体可操作的修复方案
+- None.
 
 ## Residual Risks
-- 已知但本轮无法完全消除的风险
+- None.
 
 ## Verdict
 - PASS / PASS_WITH_CONDITIONS / FAIL
 ```
+
+## 机器可读约束
+
+- `### Must-Fix (Critical)` / `### Should-Fix (Major)` / `## Residual Risks` 这些标题前缀不要改，便于账本解析
+- 空列表统一写 `- None.`
+- `## Verdict` 必须独立成节，不要把 Verdict 内容写在 Residual Risks 下面
+- 可以补充中文解释，但不要省略固定章节
 
 ## 边界
 

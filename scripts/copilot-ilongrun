@@ -570,6 +570,15 @@ case "$subcmd" in
     ;;
 esac
 
+if [ "$subcmd" = "status" ]; then
+  ensure_model_paths || true
+  cleanup_legacy_workspace_state >/dev/null 2>&1 || true
+  helper="$(helper_path render_ilongrun_status_board.py || true)"
+  if [ -n "$helper" ]; then
+    exec python3 "$helper" --workspace "$PWD" --run-id "${1:-latest}" --model-config "$MODEL_CONFIG_PATH"
+  fi
+fi
+
 preflight_or_die
 
 model=""
