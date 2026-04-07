@@ -1,6 +1,7 @@
 .DS_Store
 __pycache__/
 *.pyc
+Agents.md
 .copilot-ilongrun/
 .codex/
 docs/复盘报告-vibe-arena-20260407.md
