@@ -125,6 +125,8 @@ def run_and_stream(cmd: list[str], cwd: Path, env_patch: dict[str, str] | None =
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        encoding="utf-8",
+        errors="replace",
     )
     chunks: list[str] = []
     assert process.stdout is not None
