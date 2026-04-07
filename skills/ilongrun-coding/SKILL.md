@@ -1,308 +1,176 @@
 ---
 name: ilongrun-coding
-description: 为 iLongRun coding 任务提供完整编码纪律：TDD、增量实现、系统化调试、代码审查、安全加固、性能优化。本技能是编码执行的单一真值源。
+description: iLongRun Coding Swarm Protocol。为 coding 任务提供可长跑、可恢复、可审计的生命周期编排与工程纪律真值。
 allowed-tools: "*"
 user-invocable: false
 disable-model-invocation: false
 ---
 
 仅当 iLongRun mission 的 `profile=coding` 时自动加载。
-本技能是编码纪律的**唯一权威来源**，agents 只做薄层执行引用。
-终端用户入口是 `ilongrun-coding` shell 命令；不要把这个内部 discipline skill 当成主要的顶层调用入口。
+本技能是 **Coding Swarm Protocol 的协议入口**，而不是单个大而全的纪律说明书。
+
+- 用户入口：`ilongrun-coding` shell 命令
+- 机器真值：`config/coding-protocol.jsonc`
+- 上游快照：`vendor/agent-skills/`
+- 内部 playbooks：当前目录下的 `phase-*.md`、`swarm-policy.md`、`js-ts-profile.md`
 
 ---
 
-## 编码生命周期映射
+## 0. 协议定位
 
-iLongRun 编码任务遵循六阶段生命周期（指导性，非 scheduler 硬编码 phase）：
+iLongRun coding 任务遵循：
 
-| 阶段 | 对应 iLongRun 活动 | 关键纪律 |
-|------|---------------------|----------|
-| DEFINE | mission.md + completeness inference | 明确目标、边界、假设 |
-| PLAN | strategy.md + task-list-N.md | 垂直切片、依赖排序、大小估算 |
-| BUILD | workstream 执行 | TDD 循环、增量实现、原子提交 |
-| VERIFY | evidence.md + result.md | 系统化调试、stop-the-line |
-| REVIEW | reviews/ | 五轴代码审查、安全审计 |
-| SHIP | finalize + release | 质量门控、回滚预案 |
+```text
+DEFINE → PLAN → BUILD → VERIFY → REVIEW → AUDIT → FINALIZE
+```
+
+这不是纯文案分层，而是：
+
+- scheduler phase 的生成规则
+- workstream 合同的最小字段集
+- wave 并行边界
+- review / audit / release gate
+- resume / recovery 的最小恢复单元
 
 ---
 
-## 1. TDD 纪律（测试驱动开发）
+## 1. 入口职责
 
-### 核心循环：RED → GREEN → REFACTOR
+当本 skill 生效时，主代理必须：
 
-```
-RED:     先写一个会失败的测试，定义期望行为
-GREEN:   用最简单的代码让测试通过（不多写一行）
-REFACTOR: 消除重复、改善结构，所有测试仍须通过
-```
-
-### 测试金字塔
-
-| 层级 | 占比 | 速度 | 职责 |
-|------|------|------|------|
-| 单元测试 | ~80% | 毫秒 | 单个函数/模块逻辑 |
-| 集成测试 | ~15% | 秒级 | 模块间协作、API 契约 |
-| E2E 测试 | ~5% | 分钟 | 关键用户路径 |
-
-### Prove-It 模式（修 Bug 专用）
-
-1. 写一个**精确复现 bug** 的测试（必须先失败）
-2. 修复代码，使测试通过
-3. 确认所有既有测试仍通过
-4. 提交：测试 + 修复一起
-
-### 反模式警告
-
-| 借口 | 反驳 |
-|------|------|
-| "太简单不用测" | 简单代码会变复杂，测试是回归保险 |
-| "之后再补测试" | 之后永远不会来 |
-| "测试拖慢开发" | 没测试的 debug 更慢 |
-| "改一行不用测" | 一行改动可以破坏整个系统 |
-| "重构不用测" | Beyoncé Rule：你喜欢它就该给它写测试 |
+1. 读取 `config/coding-protocol.jsonc`
+2. 只在 `profile=coding` 下应用本协议
+3. 把任务拆成 **协调器 + worker + 依赖图 + 波次** 的蜂群模式
+4. 让 scheduler/workstream 的字段与协议保持一致
+5. 把纪律落实到 phase，而不是混成一团
 
 ---
 
-## 2. 增量实现纪律
+## 2. 生命周期路由
 
-### 核心原则：薄垂直切片
+### `phase-define`
+读取：`phase-define.md`
 
-每次增量必须：
-- 留下系统处于**可工作状态**
-- 有对应测试证明行为
-- 可独立提交和回滚
-- 范围足够小（理想 < 200 行变更）
+- 明确目标、边界、约束、假设
+- 写出 surfaced assumptions
+- 识别语言/框架/测试/构建工具
+- 输出最小可行依赖图草案
 
-### 切片策略
+### `phase-plan`
+读取：`phase-plan.md`
 
-| 策略 | 适用场景 | 示例 |
-|------|----------|------|
-| 垂直切片 | 贯穿全栈的最小特性 | 先做 1 个 API endpoint + 1 个 UI |
-| 契约优先 | 多团队协作 | 先定义接口类型，再实现 |
-| 风险优先 | 不确定性高 | 先做最不确定的部分验证可行性 |
+- 输出 dependency graph
+- 划分 swarm wave / super swarm / serial
+- 每个 workstream 必须带迷你需求文档合同
+- 给出 handoff artifacts 与 writeSet
 
-### 增量循环
+### `phase-build`
+读取：`phase-build.md` + `js-ts-profile.md`
 
-```
-1. 选择下一个最小切片
-2. 实现（遵循 TDD）
-3. 验证（测试 + 构建通过）
-4. 提交（原子提交 + 描述性消息）
-5. 重复
-```
+- 遵循 TDD、增量实现、薄垂直切片
+- foundation → implementation → integration
+- 只有 build wave 才可能进入 `/fleet`
 
-### 范围纪律
+### `phase-verify`
+读取：`phase-verify.md`
 
-- **绝不**在一个增量里混入无关改动
-- **绝不**跳过验证步骤直接进入下一个切片
-- 如果增量超过预期大小 → 停下来重新切片
-- 未完成的特性用 feature flag 隔离，不要留半成品
+- 检查测试、构建、接线、运行态证据
+- Stop-the-Line：发现错误先停再诊断
+- 对 fake completion / unwired module / placeholder provider 保持高敏感
 
----
+### `phase-review`
+读取：`phase-review.md`
 
-## 3. 系统化调试纪律
+- 默认包含三类 review：code / test-evidence / security
+- 缺任一 review 证据，不得视为 complete
+- review gate 不能被 final audit 代替
 
-### Stop-the-Line 规则
+### `phase-audit`
+读取：`phase-ship.md`
 
-当任何东西出错时：
-1. **停止**添加新功能
-2. **保留**错误现场（日志、堆栈、状态）
-3. **诊断**系统化定位根因
-4. **修复**根因而非症状
-5. **防护**添加回归测试
-6. **恢复**验证通过后才继续
+- 只做最终终审、adjudication、release blocker 判断
+- 若仍有 `must-fix`，必须回流前序 workstream
 
-### 五步排查法
+### `phase-finalize`
+读取：`phase-ship.md`
 
-```
-1. REPRODUCE  → 找到可靠的复现步骤（不能复现 = 不能自信修复）
-2. LOCALIZE   → 缩小范围：二分法、日志、断点
-3. REDUCE     → 创建最小复现用例
-4. FIX        → 修复根因 + 写回归测试
-5. GUARD      → 确认修复有效 + 所有既有测试通过
-```
-
-### 错误恢复模式
-
-| 场景 | 策略 |
-|------|------|
-| 测试失败 | 先读错误消息，再看测试代码，最后看被测代码 |
-| 构建失败 | 检查最近变更 → 依赖变化 → 环境差异 |
-| 运行时崩溃 | 收集堆栈 → 检查输入数据 → 边界条件 |
-| 间歇性失败 | 并发？时序？外部依赖？先稳定复现 |
-
-### 反模式警告
-
-| 借口 | 反驳 |
-|------|------|
-| "应该不影响" | 证明它！运行测试 |
-| "本地好的" | 环境差异是 bug 第一大来源 |
-| "先跳过这个错误" | 错误会累积，越早修越便宜 |
-| "加个 try-catch 就行" | 吞异常 = 隐藏 bug |
+- 生成 completion report
+- 清理 active pointer
+- 确认 release 就绪
 
 ---
 
-## 4. 代码审查纪律
+## 3. wave / backend 规则
 
-### 五轴审查框架
+蜂群规则详见：`swarm-policy.md`
 
-每次代码审查必须覆盖五个维度：
+硬约束：
 
-| 轴 | 关注点 | 关键问题 |
-|----|--------|----------|
-| **正确性** | 逻辑、边界、并发 | 是否如预期工作？边界情况处理了吗？ |
-| **可读性** | 命名、结构、注释 | 6 个月后还能看懂吗？ |
-| **架构** | 模块边界、依赖方向 | 是否在正确的层次？是否增加了耦合？ |
-| **安全性** | 输入验证、认证、注入 | 是否信任了不该信任的输入？ |
-| **性能** | 复杂度、资源使用、缓存 | 会不会在数据量大时崩溃？ |
-
-### 发现分级
-
-| 级别 | 含义 | 动作 |
-|------|------|------|
-| `must-fix` | 阻塞合并：正确性/安全缺陷 | 必须修复后重审 |
-| `should-fix` | 强烈建议：可读性/架构问题 | 本次或下次修复 |
-| `nit` | 可选建议：风格/命名偏好 | 作者决定 |
-| `question` | 需要解释 | 不阻塞，但需回答 |
-
-### 审查标准
-
-> "当变更整体改善了代码健康状况时就批准，即使它不完美。"
->
-> 不存在完美代码，只有越来越好的代码。
+- `phase-build` 才允许考虑 `fleet`
+- `phase-review` / `phase-audit` / `phase-finalize` 一律 `internal`
+- 涉及 Git / release / security gate / adjudication 的任务，一律 `internal`
+- 多 worker 并行必须满足：
+  - writeSet 不重叠
+  - handoffArtifacts 明确
+  - 依赖图明确
+  - 可重试
 
 ---
 
-## 5. 安全加固纪律
+## 4. workstream 最小合同字段
 
-### 三层边界系统
+每个 coding workstream 至少必须定义：
 
-| 层级 | 规则 | 示例 |
-|------|------|------|
-| **Always Do** | 无条件执行 | 参数化查询、输入验证、密码哈希 |
-| **Ask First** | 需要确认 | 新增认证方式、更改加密算法 |
-| **Never Do** | 绝对禁止 | 明文存密码、硬编码密钥、禁用 HTTPS |
+- Goal
+- Inputs
+- Outputs
+- Owner Role / Owner Model
+- Swarm Mode
+- Write Set
+- Handoff Artifacts
+- Entry Criteria
+- Exit Criteria
+- Acceptance
+- Verify
+- Retry Budget
+- Status
 
-### OWASP Top 10 防护清单
-
-| 风险 | 防护 |
-|------|------|
-| 注入 | 参数化查询/ORM、输入白名单验证 |
-| 认证失效 | bcrypt/argon2 哈希、MFA、token 过期 |
-| 敏感数据泄露 | TLS、加密存储、最小暴露面 |
-| XSS | 输出编码、CSP 头、框架自动转义 |
-| CSRF | SameSite cookie、anti-CSRF token |
-| 越权 | 服务端权限校验、最小权限原则 |
-
-### 依赖安全
-
-```bash
-# 每次构建前检查
-npm audit --production    # Node.js
-pip audit                 # Python
-cargo audit              # Rust
-```
+任务描述必须像一份 **迷你需求文档**，禁止模糊描述。
 
 ---
 
-## 6. 性能优化纪律
+## 5. JS/TS 优先画像
 
-### 核心原则：先测量，后优化
+若检测到 Node / JS / TS / React / Next / Vite：
 
-```
-MEASURE → IDENTIFY → FIX → VERIFY → GUARD
-绝不凭直觉优化。没有基准数据 = 没有优化资格。
-```
+- 优先关注 import graph / entry wiring
+- evidence 必须至少包含：test + build + runtime / integration 之一
+- review 时额外检查：
+  - 未接主链模块
+  - 双份核心模块
+  - noop / placeholder provider
+  - web 输入边界与 secret handling
 
-### 常见反模式
-
-| 反模式 | 正确做法 |
-|--------|----------|
-| 过早优化 | 先让代码正确，再根据数据优化 |
-| 猜测瓶颈 | 用 profiler 定位真实热点 |
-| 缓存一切 | 只缓存被证明昂贵的操作 |
-| 微优化 | 先优化算法复杂度，再优化常数因子 |
-
-### 性能预算
-
-| 指标 | 目标 |
-|------|------|
-| LCP (Largest Contentful Paint) | ≤ 2.5s |
-| INP (Interaction to Next Paint) | ≤ 200ms |
-| CLS (Cumulative Layout Shift) | ≤ 0.1 |
-| TTFB (Time to First Byte) | ≤ 800ms |
+详见：`js-ts-profile.md`
 
 ---
 
-## 7. Git 工作流纪律
+## 6. 恢复与裁决
 
-### 原子提交原则
-
-- 每个提交做一件事
-- 提交消息说明**为什么**，diff 说明**什么**
-- 不要把格式化、重构、功能混在一个提交
-- 提交前跑测试
-
-### 提交消息格式
-
-```
-<type>(<scope>): <简要描述>
-
-<详细说明（可选）>
-
-<breaking changes / references（可选）>
-```
-
-类型：`feat` / `fix` / `refactor` / `test` / `docs` / `chore`
+- resume 只补当前 gate，不重做已通过 gate
+- recovery 优先最小修复，不整局重开
+- must-fix 只允许通过返工 workstream 清零，不能口头跳过
+- finalize 之前必须满足：
+  - review gate 完整
+  - final audit 存在
+  - adjudication 已写入
+  - verification 通过
 
 ---
 
-## 常见合理化借口表（全局）
+## 7. 机器可读约束
 
-> 这些是代理和人类在跳过纪律时常用的借口。识别它们、拒绝它们。
-
-| 借口 | 反驳 |
-|------|------|
-| "时间不够" | 没纪律的 debug 更费时间 |
-| "这只是原型" | 原型经常变成产品代码 |
-| "我对这段很有信心" | 信心不是证明，测试才是 |
-| "先上线再说" | 上线后修复成本是 10x |
-| "别人的代码有同样问题" | 不是放行的理由 |
-| "这个改动太小了" | 小改动大影响的案例数不胜数 |
-| "AI 生成的代码应该没问题" | AI 会自信地生成错误代码 |
-| "测试/安全/性能之后补" | 之后 = 永远不会 |
-
----
-
-## Red Flags（危险信号）
-
-出现以下信号时，**立即停下检查**：
-
-- [ ] 代码改了但没跑测试就提交
-- [ ] "在我机器上好使" 但 CI 失败
-- [ ] 一个 PR 超过 500 行变更
-- [ ] 捕获异常但不处理（空 catch）
-- [ ] 硬编码的密钥、密码、token
-- [ ] 跳过代码审查"因为赶时间"
-- [ ] "临时" 的 hack 没有 TODO 和 deadline
-- [ ] 性能优化没有基准测试支撑
-- [ ] 新增依赖没有评估安全性和大小
-- [ ] 合并冲突"盲目解决"没有理解上下文
-
----
-
-## Verification Checklist
-
-任务完成前必须确认：
-
-- [ ] 所有新代码有对应测试
-- [ ] 测试覆盖正常路径 + 主要边界情况
-- [ ] 构建通过，无 warning 升级
-- [ ] 无硬编码密钥或敏感数据
-- [ ] 变更已分成合理的原子提交
-- [ ] 代码审查完成且 must-fix 为空
-- [ ] 性能无明显退化（如适用）
-- [ ] 文档已更新（如适用）
-- [ ] 依赖安全审计通过（如有新依赖）
-- [ ] 回归测试通过
+- 任何与本协议冲突的自由发挥，都以 `config/coding-protocol.jsonc` 为准
+- 空节统一写 `- None.`
+- coding run 不允许绕过 `phase-review` 直接 complete
+- `reviews/gpt54-final-review.md` 仍保留兼容文件名

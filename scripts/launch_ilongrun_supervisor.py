@@ -535,6 +535,10 @@ def maybe_run_gpt54_audit(args, workspace: Path, run_ref: str) -> bool:
     sched = reconcile_scheduler(target)
     if sched.get("profile") != "coding":
         return True
+    review_phase = next((phase for phase in sched.get("phases") or [] if phase.get("id") == "phase-review"), None)
+    if review_phase and str(review_phase.get("status") or "") != "complete":
+        print("[ILongRun] phase-review 尚未完成，跳过 final audit 触发。")
+        return True
     if final_review_path(target).exists() and final_review_path(target).stat().st_size > 0:
         return True
     audit_model = load_model_config(args.model_config).get("codingAuditModel", "gpt-5.4")

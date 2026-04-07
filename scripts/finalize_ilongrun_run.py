@@ -12,6 +12,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from _ilongrun_report_templates import build_completion_report_markdown
 from _ilongrun_lib import (
+    adjudication_path,
     completion_path,
     final_review_path,
     persist_run_ledger,
@@ -85,6 +86,13 @@ def main() -> int:
         if not final_review_path(target).exists() and not args.force_complete:
             verification["ok"] = False
             verification.setdefault("hardFailures", []).append("reviews/gpt54-final-review.md is missing")
+        if not adjudication_path(target).exists() and not args.force_complete:
+            verification["ok"] = False
+            verification.setdefault("hardFailures", []).append("reviews/adjudication.md is missing")
+        for gate_id, gate_state in ((sched.get("reviews") or {}).get("gateStatus") or {}).items():
+            if gate_state != "complete" and not args.force_complete:
+                verification["ok"] = False
+                verification.setdefault("hardFailures", []).append(f"phase-review gate incomplete: {gate_id}")
         pending = int((sched.get("reviews") or {}).get("pendingMustFixCount") or 0)
         if pending > 0 and not args.force_complete:
             verification["ok"] = False

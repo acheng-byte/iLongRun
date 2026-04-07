@@ -101,6 +101,8 @@ known_agent_names = {
     "ilongrun-recovery.agent.md",
     "ilongrun-gpt54-audit-reviewer.agent.md",
     "ilongrun-code-reviewer.agent.md",
+    "ilongrun-test-engineer.agent.md",
+    "ilongrun-security-auditor.agent.md",
 }
 content_markers = (
     "ilongrun",

@@ -166,6 +166,8 @@ def next_steps(rows: dict[str, dict[str, str]], model_payload: dict, refresh_cac
     if rows.get("selftest", {}).get("status") == "fail":
         log_path = rows.get("selftest_log", {}).get("value") or str(selftest_log)
         steps.append(f"自检脚本未通过，可先查看完整日志：{log_path}")
+    if any(rows.get(key, {}).get("status") == "fail" for key in ("coding_protocol", "vendor_snapshot", "coding_playbooks", "coding_agents")):
+        steps.append("coding protocol bundle 不完整，建议重新执行一键安装脚本补齐 skill playbooks / agents / vendor 快照。")
     models = model_payload.get("models") or {}
     unavailable = [item.get("displayName") or key for key, item in models.items() if item.get("status") == "unavailable"]
     if unavailable:
@@ -224,6 +226,12 @@ def main() -> int:
     print(detail_line("Copilot CLI", f"{status_icon(copilot_row['status'])} {copilot_row['value']}"))
     print(detail_line("登录账号", f"{status_icon(login_row['status'])} {login_row['value']}"))
     print(detail_line("模型配置", f"{status_icon(policy_row['status'])} {policy_row['value']}"))
+    protocol_row = rows.get("coding_protocol")
+    if protocol_row:
+        print(detail_line("Coding 协议", f"{status_icon(protocol_row['status'])} {protocol_row['value']}"))
+    vendor_row = rows.get("vendor_snapshot")
+    if vendor_row:
+        print(detail_line("Vendor 快照", f"{status_icon(vendor_row['status'])} {vendor_row['value']}"))
 
     legacy_row = rows.get("legacy_plugin")
     if legacy_row:
@@ -244,6 +252,17 @@ def main() -> int:
     if missing_launchers:
         print(detail_line("缺失命令", ", ".join(missing_launchers)))
     print("")
+
+    playbooks_row = rows.get("coding_playbooks")
+    agents_row = rows.get("coding_agents")
+    if playbooks_row or agents_row:
+        print(section_heading("🧬 Coding Protocol Bundle"))
+        print(section_rule())
+        if playbooks_row:
+            print(detail_line("Skill Playbooks", f"{status_icon(playbooks_row['status'])} {playbooks_row['value']}"))
+        if agents_row:
+            print(detail_line("专项 Agents", f"{status_icon(agents_row['status'])} {agents_row['value']}"))
+        print("")
 
     print(section_heading("🧠 模型缓存刷新结果" if args.refresh_cache else "🧠 模型缓存概览"))
     print(section_rule())

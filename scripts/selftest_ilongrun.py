@@ -72,8 +72,20 @@ def main() -> int:
         assert (run_dir / "projection-sync.jsonl").exists()
         assert list(run_dir.glob("task-list-*.md"))
         prepared_scheduler = read_json(run_dir / "scheduler.json")
+        assert prepared_scheduler.get("profile") == "coding"
         assert (prepared_scheduler.get("projectionState") or {}).get("ledgerSyncReason") == "run-prepared"
         assert (prepared_scheduler.get("projectionState") or {}).get("ledgerSyncActor") == "ledger-syncer"
+        assert [phase.get("id") for phase in prepared_scheduler.get("phases") or []] == [
+            "phase-define",
+            "phase-plan",
+            "phase-build",
+            "phase-verify",
+            "phase-review",
+            "phase-audit",
+            "phase-finalize",
+        ]
+        assert (prepared_scheduler.get("codingProtocol") or {}).get("version") == "0.6.0"
+        assert (prepared_scheduler.get("reviewMatrix") or {}).get("gates")
 
         model_info_run = run(
             str(ROOT / "model_policy_info.py"),
@@ -206,6 +218,8 @@ def main() -> int:
         assert coding_sched.get("profile") == "coding"
         assert (coding_sched.get("mission") or {}).get("profile") == "coding"
         assert (coding_sched.get("reviews") or {}).get("required") is True
+        assert (coding_sched.get("swarmPolicy") or {}).get("defaultMode") == "swarm-wave"
+        assert (coding_sched.get("reviewMatrix") or {}).get("gates")
         launch_board = run(
             str(ROOT / "render_ilongrun_launch_board.py"),
             "--workspace", str(coding_workspace),
@@ -276,12 +290,22 @@ def main() -> int:
         assert fleet_capability.get("cache") == "/tmp/fleet-cache.json"
         assert fleet_capability.get("rawOutputDigest")
         assert (fleet_scheduler.get("projectionState") or {}).get("ledgerSyncReason") == "fleet-runtime-updated"
+        fleet_wave_id = next(
+            (
+                wave.get("id")
+                for phase in fleet_scheduler.get("phases") or []
+                for wave in phase.get("waves") or []
+                if str(wave.get("id") or "").startswith("wave-build-")
+            ),
+            "",
+        )
+        assert fleet_wave_id, "build fleet wave missing"
         run_inline(
             "from pathlib import Path; import json; "
             f"p = Path({str(run_dir / 'scheduler.json')!r}); "
             "data = json.loads(p.read_text(encoding='utf-8')); "
-            "waves = [wave for phase in data.get('phases') or [] for wave in phase.get('waves') or [] if wave.get('id') == 'wave-execution-1']; "
-            "assert waves, 'wave-execution-1 missing'; "
+            f"waves = [wave for phase in data.get('phases') or [] for wave in phase.get('waves') or [] if wave.get('id') == {fleet_wave_id!r}]; "
+            f"assert waves, '{fleet_wave_id} missing'; "
             "waves[0]['backend'] = 'fleet'; "
             "p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')"
         )
@@ -289,17 +313,17 @@ def main() -> int:
             "from pathlib import Path; "
             f"import sys; sys.path.insert(0, {str(ROOT)!r}); "
             "import launch_ilongrun_supervisor as sup; "
-            f"sup.mark_fleet_dispatch_started(Path({str(workspace)!r}), {run_id!r}, 'wave-execution-1', 'claude-sonnet-4.6')"
+            f"sup.mark_fleet_dispatch_started(Path({str(workspace)!r}), {run_id!r}, {fleet_wave_id!r}, 'claude-sonnet-4.6')"
         )
         run_inline(
             "from pathlib import Path; "
             f"import sys; sys.path.insert(0, {str(ROOT)!r}); "
             "import launch_ilongrun_supervisor as sup; "
-            f"sup.set_wave_backend(Path({str(workspace)!r}), {run_id!r}, 'wave-execution-1', 'internal', 'selftest degrade', 'degradedWaves', outcome='degraded', model='claude-sonnet-4.6', rc=1, fallback_reason='command-not-recognized')"
+            f"sup.set_wave_backend(Path({str(workspace)!r}), {run_id!r}, {fleet_wave_id!r}, 'internal', 'selftest degrade', 'degradedWaves', outcome='degraded', model='claude-sonnet-4.6', rc=1, fallback_reason='command-not-recognized')"
         )
         fleet_scheduler = read_json(run_dir / "scheduler.json")
         fleet_dispatch = ((fleet_scheduler.get("runtime") or {}).get("fleetDispatch") or {})
-        assert "wave-execution-1" in (fleet_dispatch.get("degradedWaves") or [])
+        assert fleet_wave_id in (fleet_dispatch.get("degradedWaves") or [])
         assert fleet_dispatch.get("lastOutcome") == "degraded"
         assert len(fleet_dispatch.get("dispatchEvents") or []) >= 2
         assert any(item.get("outcome") == "dispatch-started" for item in fleet_dispatch.get("dispatchEvents") or [])

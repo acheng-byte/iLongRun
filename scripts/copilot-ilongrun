@@ -367,6 +367,7 @@ doctor() {
   local helper_cleanup="$(helper_path cleanup_legacy_workspace.py || true)"
   local helper_render_board="$(helper_path render_ilongrun_doctor_board.py || true)"
   local expected_launchers=(ilongrun ilongrun-coding ilongrun-prompt ilongrun-resume ilongrun-status ilongrun-doctor copilot-ilongrun)
+  local coding_playbooks=(phase-define.md phase-plan.md phase-build.md phase-verify.md phase-review.md phase-ship.md swarm-policy.md js-ts-profile.md)
   local tmp_dir checks_file model_probe_json fleet_probe_json selftest_err selftest_out selftest_state_log fleet_cache_path
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ilongrun-doctor.XXXXXX")"
   checks_file="$tmp_dir/checks.tsv"
@@ -435,6 +436,38 @@ PY
   if [ -n "$copilot_bin" ]; then doctor_row copilot ok "$copilot_bin"; else doctor_row copilot fail "未检测到 copilot CLI"; issues=$((issues+1)); fi
   if [ -n "$login" ]; then doctor_row login ok "$login"; else doctor_row login fail "未登录 GitHub Copilot"; issues=$((issues+1)); fi
   if [ -f "$MODEL_CONFIG_PATH" ]; then doctor_row model_policy ok "$MODEL_CONFIG_PATH"; else doctor_row model_policy fail "模型配置文件缺失"; issues=$((issues+1)); fi
+  if [ -f "$ILONGRUN_HOME/config/coding-protocol.jsonc" ]; then
+    doctor_row coding_protocol ok "$ILONGRUN_HOME/config/coding-protocol.jsonc"
+  else
+    doctor_row coding_protocol fail "coding protocol 缺失"
+    issues=$((issues+1))
+  fi
+  if [ -f "$ILONGRUN_HOME/vendor/agent-skills/LICENSE" ]; then
+    doctor_row vendor_snapshot ok "$ILONGRUN_HOME/vendor/agent-skills"
+  else
+    doctor_row vendor_snapshot fail "vendor/agent-skills 快照缺失"
+    issues=$((issues+1))
+  fi
+  local missing_playbooks=()
+  for playbook in "${coding_playbooks[@]}"; do
+    [ -f "$HOME/.copilot/skills/ilongrun-coding/$playbook" ] || missing_playbooks+=("$playbook")
+  done
+  if [ "${#missing_playbooks[@]}" -eq 0 ]; then
+    doctor_row coding_playbooks ok "$HOME/.copilot/skills/ilongrun-coding"
+  else
+    doctor_row coding_playbooks fail "缺失：${missing_playbooks[*]}"
+    issues=$((issues+1))
+  fi
+  local missing_agents=()
+  for agent in ilongrun-test-engineer.agent.md ilongrun-security-auditor.agent.md; do
+    [ -f "$HOME/.copilot/agents/$agent" ] || missing_agents+=("$agent")
+  done
+  if [ "${#missing_agents[@]}" -eq 0 ]; then
+    doctor_row coding_agents ok "$HOME/.copilot/agents"
+  else
+    doctor_row coding_agents fail "缺失：${missing_agents[*]}"
+    issues=$((issues+1))
+  fi
   if legacy_plugin_enabled; then
     if auto_uninstall_legacy_plugin >/dev/null 2>&1; then
       doctor_row legacy_plugin ok "已自动卸载：${LEGACY_PLUGIN_NAME}"

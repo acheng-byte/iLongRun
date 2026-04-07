@@ -46,7 +46,11 @@ PROFILE_LABELS = {
 }
 PHASE_LABELS = {
     "phase-strategy": "策略制定",
+    "phase-define": "定义",
+    "phase-plan": "规划",
     "phase-build": "构建",
+    "phase-verify": "验证",
+    "phase-review": "评审",
     "phase-execution": "执行",
     "phase-audit": "最终审查",
     "phase-finalize": "收尾",
@@ -118,6 +122,8 @@ def main() -> int:
     mode = sched.get("mode") or "direct-lane"
     profile = sched.get("profile") or ("coding" if args.subcommand == "coding" else "office")
     updated = sched.get("updatedAt") or "刚刚"
+    coding_protocol = sched.get("codingProtocol") or {}
+    swarm_policy = sched.get("swarmPolicy") or {}
 
     print(open_top(board_title("🚀", "启动看板"), tail_width=28))
     print(left_border())
@@ -128,6 +134,8 @@ def main() -> int:
     print(board_line("🌐 任务画像", tone("warm", zh(PROFILE_LABELS, profile))))
     print(board_line("🤖 执行模型", model_value(selected, config)))
     print(board_line("🔍 最终终审", model_value(audit_model, config)))
+    if profile == "coding":
+        print(board_line("🧬 Coding 协议", tone("soft", f"{coding_protocol.get('version') or '0.6.0'} / {swarm_policy.get('activeMode') or mode}")))
     print(board_line("🕐 最近更新", tone("soft", updated)))
     print(left_border())
     print(open_bottom())

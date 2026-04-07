@@ -1,0 +1,165 @@
+{
+  // iLongRun v0.6.0 Coding Swarm Protocol
+  // 单一机器真值：供 skills / supervisor / status / doctor / selftest 共用
+  "version": "0.6.0",
+  "name": "iLongRun Coding Swarm Protocol",
+  "sourceSnapshot": {
+    "repository": "https://github.com/addyosmani/agent-skills",
+    "commit": "1068b1b498f3223a08242402217fec4efc35dcb8",
+    "snapshotDate": "2026-04-07",
+    "license": "MIT"
+  },
+  "sourceSkills": [
+    "using-agent-skills",
+    "spec-driven-development",
+    "planning-and-task-breakdown",
+    "context-engineering",
+    "incremental-implementation",
+    "test-driven-development",
+    "debugging-and-error-recovery",
+    "code-review-and-quality",
+    "security-and-hardening",
+    "performance-optimization",
+    "documentation-and-adrs",
+    "git-workflow-and-versioning",
+    "shipping-and-launch"
+  ],
+  "swarmPolicies": {
+    "defaultMode": "swarm-wave",
+    "allowedModes": ["serial", "swarm-wave", "super-swarm"],
+    "maxParallelWorkstreams": 4,
+    "maxFleetParallelWorkstreams": 8,
+    "internalOnlyPhases": ["phase-review", "phase-audit", "phase-finalize"],
+    "internalOnlyWorkKinds": ["review", "audit", "release", "git", "finalize"],
+    "fleetRequires": [
+      "phase-build only",
+      "non-overlapping writeSet",
+      "explicit handoffArtifacts",
+      "retryable worker contract"
+    ],
+    "forbiddenFleetPatterns": [
+      "shared write set",
+      "git mutation",
+      "release flow",
+      "final audit / adjudication",
+      "security-sensitive manual checkpoint"
+    ]
+  },
+  "phaseDefinitions": [
+    {
+      "id": "phase-define",
+      "title": "Define",
+      "taskList": true,
+      "defaultWave": "wave-define-1",
+      "gates": ["assumptions surfaced", "goal / scope / constraints locked"]
+    },
+    {
+      "id": "phase-plan",
+      "title": "Plan",
+      "taskList": true,
+      "defaultWave": "wave-plan-1",
+      "gates": ["dependency graph written", "task slices sized", "handoff contracts defined"]
+    },
+    {
+      "id": "phase-build",
+      "title": "Build",
+      "taskList": true,
+      "defaultWave": "wave-build-foundation",
+      "gates": ["incremental implementation", "TDD evidence", "build slice verification"]
+    },
+    {
+      "id": "phase-verify",
+      "title": "Verify",
+      "taskList": false,
+      "defaultWave": "wave-verify-1",
+      "gates": ["tests", "build", "runtime / wiring evidence"]
+    },
+    {
+      "id": "phase-review",
+      "title": "Review",
+      "taskList": false,
+      "defaultWave": "wave-review-1",
+      "gates": ["code review", "test evidence review", "security review"]
+    },
+    {
+      "id": "phase-audit",
+      "title": "Audit",
+      "taskList": false,
+      "defaultWave": "wave-audit-1",
+      "gates": ["final audit", "adjudication", "release blockers"]
+    },
+    {
+      "id": "phase-finalize",
+      "title": "Finalize",
+      "taskList": false,
+      "defaultWave": "wave-finalize-1",
+      "gates": ["completion report", "pointer cleanup", "release readiness"]
+    }
+  ],
+  "reviewMatrix": {
+    "requiredForProfiles": ["coding"],
+    "gates": [
+      {
+        "id": "review-code",
+        "title": "Code Review",
+        "agentRole": "code-reviewer",
+        "ownerRole": "ilongrun-code-reviewer",
+        "required": true,
+        "artifacts": ["workstreams/*/result.md", "workstreams/*/evidence.md"]
+      },
+      {
+        "id": "review-test-evidence",
+        "title": "Test Evidence Review",
+        "agentRole": "test-engineer",
+        "ownerRole": "ilongrun-test-engineer",
+        "required": true,
+        "artifacts": ["test output", "build output", "runtime validation"]
+      },
+      {
+        "id": "review-security",
+        "title": "Security Review",
+        "agentRole": "security-auditor",
+        "ownerRole": "ilongrun-security-auditor",
+        "required": true,
+        "artifacts": ["input boundaries", "secret handling", "dependency risk"]
+      }
+    ]
+  },
+  "languageProfiles": {
+    "default": {
+      "stackHints": ["local-files", "shell-first"],
+      "testingExpectation": "至少留下可重复验证的测试/构建/运行证据"
+    },
+    "js-ts-priority": {
+      "languages": ["javascript", "typescript", "node", "react", "next.js", "vite"],
+      "packageManagers": ["npm", "pnpm", "yarn", "bun"],
+      "defaultVerification": ["unit", "integration", "build", "runtime"],
+      "defaultReviewFocus": ["import graph", "entry wiring", "test evidence", "web security"],
+      "handoffArtifacts": ["changed entrypoints", "test command", "build command", "runtime proof"]
+    }
+  },
+  "workstreamContract": {
+    "requiredFields": [
+      "goal",
+      "inputs",
+      "outputs",
+      "ownerRole",
+      "ownerModel",
+      "swarmMode",
+      "writeSet",
+      "handoffArtifacts",
+      "entryCriteria",
+      "exitCriteria",
+      "acceptance",
+      "verify",
+      "retryBudget",
+      "status"
+    ]
+  },
+  "releasePolicy": {
+    "blockOnPendingMustFix": true,
+    "blockOnMissingReviewArtifacts": true,
+    "blockOnMissingAudit": true,
+    "blockOnFailedVerification": true
+  }
+}

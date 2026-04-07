@@ -59,6 +59,7 @@ STATE_LABELS = {
     "not-required": "不适用",
     "unknown": "未知",
     "written": "已写入",
+    "waiting-audit": "待终审",
 }
 MODE_LABELS = {
     "direct-lane": "直连模式",
@@ -91,6 +92,8 @@ VERDICT_LABELS = {
 }
 PHASE_LABELS = {
     "phase-strategy": "策略制定",
+    "phase-define": "定义",
+    "phase-plan": "规划",
     "phase-define-plan": "定义与规划",
     "phase-build": "构建",
     "phase-core-infra": "核心基础设施",
@@ -318,6 +321,9 @@ def main() -> int:
     reviews = sched.get("reviews") or {}
     projection = sched.get("projectionState") or {}
     score = snapshot.get("completionScore") or {}
+    coding_protocol = sched.get("codingProtocol") or {}
+    swarm_policy = sched.get("swarmPolicy") or {}
+    review_matrix = sched.get("reviewMatrix") or {}
 
     print(open_top(board_title("🧭", "状态看板"), tail_width=28))
     print(left_border())
@@ -328,6 +334,8 @@ def main() -> int:
     print(board_line("🌐 任务画像", tone("warm", zh(PROFILE_LABELS, sched.get("profile"), fallback=str(sched.get("profile") or "无")))))
     print(board_line("🤖 执行模型", tone("bright", display_model_name(sched.get("selectedModel") or "unknown", config))))
     print(board_line("🔑 控制模式", tone("soft", zh(CONTROL_LABELS, sched.get("modelControlMode"), fallback=str(sched.get("modelControlMode") or "无")))))
+    if str(sched.get("profile") or "") == "coding":
+        print(board_line("🧬 Coding 协议", tone("soft", f"{coding_protocol.get('name') or 'iLongRun Coding Swarm Protocol'} {coding_protocol.get('version') or 'n/a'}")))
     print(board_line("🕐 最近更新", tone("soft", str(sched.get("updatedAt") or "无"))))
     print(left_border())
     print(open_bottom())
@@ -385,6 +393,16 @@ def main() -> int:
     print("")
 
     if str(sched.get("profile") or "") == "coding":
+        print(section_heading("🐝 Coding Swarm Protocol"))
+        print(section_rule())
+        print(detail_line("协议版本", tone("soft", str(coding_protocol.get("version") or "无"))))
+        print(detail_line("当前 swarm", tone("soft", str(swarm_policy.get("activeMode") or sched.get("mode") or "无"))))
+        print(detail_line("默认 swarm", tone("soft", str(swarm_policy.get("defaultMode") or "无"))))
+        print(detail_line("并行上限", tone("soft", f"{swarm_policy.get('maxParallelWorkstreams') or 'n/a'} / fleet {swarm_policy.get('maxFleetParallelWorkstreams') or 'n/a'}")))
+        dependency_graph = sched.get("dependencyGraph") or {}
+        print(detail_line("依赖图", tone("soft", f"{len(dependency_graph.get('nodes') or [])} 节点 / {len(dependency_graph.get('edges') or [])} 边")))
+        print("")
+
         print(section_heading("🔒 质量门禁"))
         print(section_rule())
         review_gate = "待终审"
@@ -398,6 +416,11 @@ def main() -> int:
         print(detail_line("最终终审", tone("warn" if "返工" in review_gate or "待" in review_gate else "ok", review_gate)))
         print(detail_line("裁决", tone("ok" if snapshot.get("adjudicationExists") else "warn", "已写入" if snapshot.get("adjudicationExists") else "未写入")))
         print(detail_line("必须修复", tone("err" if int(reviews.get("pendingMustFixCount") or 0) > 0 else "ok", f"{int(reviews.get('pendingMustFixCount') or 0)} 项")))
+        gate_status = reviews.get("gateStatus") or {}
+        for gate in review_matrix.get("gates") or []:
+            gate_id = str(gate.get("id") or "")
+            gate_label = str(gate.get("title") or gate_id)
+            print(detail_line(gate_label, tone_status(gate_status.get(gate_id))))
         print("")
 
     print(section_heading("🛡️ 验证状态"))

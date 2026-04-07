@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ILONGRUN_HOME="${ILONGRUN_HOME:-$HOME/.copilot-ilongrun}"
 HELPER_BIN_DIR="$ILONGRUN_HOME/bin"
 HELPER_CONFIG_DIR="$ILONGRUN_HOME/config"
+HELPER_VENDOR_DIR="$ILONGRUN_HOME/vendor"
 TARGET_SKILLS_DIR="$HOME/.copilot/skills"
 TARGET_AGENTS_DIR="$HOME/.copilot/agents"
 
@@ -39,7 +40,7 @@ install_copied_file() {
 }
 
 HELPER_REFS_DIR="$ILONGRUN_HOME/references"
-mkdir -p "$TARGET_SKILLS_DIR" "$TARGET_AGENTS_DIR" "$HELPER_BIN_DIR" "$HELPER_CONFIG_DIR" "$HELPER_REFS_DIR"
+mkdir -p "$TARGET_SKILLS_DIR" "$TARGET_AGENTS_DIR" "$HELPER_BIN_DIR" "$HELPER_CONFIG_DIR" "$HELPER_REFS_DIR" "$HELPER_VENDOR_DIR"
 
 find_bin_from_common_locations() {
   local name="$1"
@@ -175,6 +176,12 @@ if [ ! -f "$HELPER_CONFIG_DIR/model-availability.json" ]; then
 else
   printf 'Preserved existing model availability cache: %s\n' "$HELPER_CONFIG_DIR/model-availability.json"
 fi
+install_copied_file "$ROOT_DIR/config/coding-protocol.jsonc" "$HELPER_CONFIG_DIR/coding-protocol.jsonc"
+printf 'Installed coding protocol: %s\n' "$HELPER_CONFIG_DIR/coding-protocol.jsonc"
+if [ -d "$ROOT_DIR/vendor/agent-skills" ]; then
+  install_copied_dir "$ROOT_DIR/vendor/agent-skills" "$HELPER_VENDOR_DIR/agent-skills"
+  printf 'Installed vendor snapshot: %s\n' "$HELPER_VENDOR_DIR/agent-skills"
+fi
 
 cat <<EOF2
 
@@ -195,4 +202,10 @@ ILongRun helper bundle:
 
 Model policy:
   $HELPER_CONFIG_DIR/model-policy.jsonc
+
+Coding protocol:
+  $HELPER_CONFIG_DIR/coding-protocol.jsonc
+
+Vendored agent-skills snapshot:
+  $HELPER_VENDOR_DIR/agent-skills
 EOF2

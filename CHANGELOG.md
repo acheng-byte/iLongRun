@@ -1,5 +1,37 @@
 # 更新日志
 
+## v0.6.0
+
+`ilongrun-coding` 正式升级为可长跑、可恢复、可审计的 **Coding Swarm Protocol**：把 coding mission 从“统一纪律文案”重构为“协议真值 + phase playbooks + review gates + vendorized agent-skills 方法库”的完整执行内核。
+
+### 新增
+- **`config/coding-protocol.jsonc`**：新增 coding 生命周期、swarm 策略、review matrix、语言画像、release policy 的机器真值
+- **`vendor/agent-skills/`**：固化上游精选技能快照与许可证，运行时只消费 iLongRun 适配协议，不再依赖外部仓库
+- **`skills/ilongrun-coding/*` playbooks**：新增 `phase-define / phase-plan / phase-build / phase-verify / phase-review / phase-ship / swarm-policy / js-ts-profile`
+- **专项 review agents**：新增 `ilongrun-test-engineer.agent.md` 与 `ilongrun-security-auditor.agent.md`
+- **doctor 协议 bundle 检查**：新增 coding protocol、vendor snapshot、playbooks、专项 agents 完整性检查
+
+### 重构
+- **coding phase 真正独立**：`profile=coding` 现在固定走 `phase-define → phase-plan → phase-build → phase-verify → phase-review → phase-audit → phase-finalize`
+- **scheduler / workstream 协议升级**：新增 `codingProtocol / swarmPolicy / dependencyGraph / reviewMatrix` 与 `skillPack / swarmMode / writeSet / handoffArtifacts / entryCriteria / exitCriteria / verificationClass / reviewRequired`
+- **`ilongrun-coding` 元技能化**：顶层 `SKILL.md` 改为协议路由器，细节下沉到 phase playbooks
+- **投影文档增强**：`strategy.md / plan.md / task-list-N.md / workstream brief` 现在会显式展示 swarm 模式、依赖图、write set、handoff、review gate 等协议字段
+
+### 增强
+- **build-only `/fleet` 语义**：coding run 仅 `phase-build` 波次允许评估 `/fleet`；`review / audit / finalize / git / release` 一律 internal
+- **独立 `phase-review` gate**：code / test-evidence / security 三个 review gate 成为 finalize 前的硬门禁，不能再被 final audit 代替
+- **终审/裁决状态收敛**：`phase-audit` 负责最终终审与 release blocker，`phase-finalize` 负责完成态闭环，二者状态会反映在 status/plan/strategy 中
+- **doctor / launch / status 看板升级**：新增 coding protocol 版本、swarm active mode、review matrix / gate 状态展示
+- **安装器升级**：安装/卸载现在会同步处理 `coding-protocol.jsonc` 与 `vendor/agent-skills/`
+
+### 测试
+- `selftest_ilongrun.py` 已覆盖：
+  - 新 coding phase 拓扑
+  - coding protocol / review matrix 落盘
+  - build wave 的 `/fleet` dispatch/degrade 证据
+  - review gate 阻断 finalize
+  - 历史 run ledger sync / drift merge / delivery audit 兼容
+
 ## v0.5.0
 
 账本一致性与动态投影同步补强：修复 finalize/verifier/task-list 契约错位，引入确定性 ledger sync，并补上对已完成 run 的状态清理。
