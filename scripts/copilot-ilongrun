@@ -366,8 +366,9 @@ doctor() {
   local helper_notify="$(helper_path notify_macos.py || true)"
   local helper_cleanup="$(helper_path cleanup_legacy_workspace.py || true)"
   local helper_render_board="$(helper_path render_ilongrun_doctor_board.py || true)"
+  local helper_skill_lint="$(helper_path lint_ilongrun_skills.py || true)"
   local expected_launchers=(ilongrun ilongrun-coding ilongrun-prompt ilongrun-resume ilongrun-status ilongrun-doctor copilot-ilongrun)
-  local coding_playbooks=(phase-define.md phase-plan.md phase-build.md phase-verify.md phase-review.md phase-ship.md swarm-policy.md js-ts-profile.md)
+  local coding_playbooks=(phase-define.md phase-plan.md phase-build.md phase-verify.md phase-review.md phase-ship.md swarm-policy.md js-ts-profile.md workspace-isolation.md task-microcycle.md claim-verification.md recovery-debug.md skill-engineering.md)
   local tmp_dir checks_file model_probe_json fleet_probe_json selftest_err selftest_out selftest_state_log fleet_cache_path
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ilongrun-doctor.XXXXXX")"
   checks_file="$tmp_dir/checks.tsv"
@@ -437,7 +438,31 @@ PY
   if [ -n "$login" ]; then doctor_row login ok "$login"; else doctor_row login fail "未登录 GitHub Copilot"; issues=$((issues+1)); fi
   if [ -f "$MODEL_CONFIG_PATH" ]; then doctor_row model_policy ok "$MODEL_CONFIG_PATH"; else doctor_row model_policy fail "模型配置文件缺失"; issues=$((issues+1)); fi
   if [ -f "$ILONGRUN_HOME/config/coding-protocol.jsonc" ]; then
-    doctor_row coding_protocol ok "$ILONGRUN_HOME/config/coding-protocol.jsonc"
+    local protocol_check
+    protocol_check="$(python3 - "$ILONGRUN_HOME/config/coding-protocol.jsonc" "$HELPER_BIN_DIR" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[2])
+from _ilongrun_shared import read_jsonc
+payload = read_jsonc(Path(sys.argv[1]), {})
+required = [
+    "methodologyOverlay",
+    "workspaceIsolationPolicy",
+    "taskMicrocycle",
+    "claimVerificationPolicy",
+    "debugPolicy",
+    "skillEngineeringPolicy",
+]
+missing = [key for key in required if key not in payload]
+print("ok" if not missing else "missing:" + ",".join(missing))
+PY
+)"
+    if [ "$protocol_check" = "ok" ]; then
+      doctor_row coding_protocol ok "$ILONGRUN_HOME/config/coding-protocol.jsonc"
+    else
+      doctor_row coding_protocol fail "coding protocol 缺字段：${protocol_check#missing:}"
+      issues=$((issues+1))
+    fi
   else
     doctor_row coding_protocol fail "coding protocol 缺失"
     issues=$((issues+1))
@@ -466,6 +491,12 @@ PY
     doctor_row coding_agents ok "$HOME/.copilot/agents"
   else
     doctor_row coding_agents fail "缺失：${missing_agents[*]}"
+    issues=$((issues+1))
+  fi
+  if [ -n "$helper_skill_lint" ] && [ -f "$helper_skill_lint" ]; then
+    doctor_row skill_lint ok "$helper_skill_lint"
+  else
+    doctor_row skill_lint fail "lint_ilongrun_skills.py 缺失"
     issues=$((issues+1))
   fi
   if legacy_plugin_enabled; then

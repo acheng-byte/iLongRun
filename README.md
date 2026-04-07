@@ -21,90 +21,84 @@ scheduler.json + workstreams/*/status.json
 - `mission.md / strategy.md / plan.md / task-list-N.md` 的多层投影
 - `Mission Governor + Planner-of-Planners + Ledger Syncer + Recovery + Audit` 的分层角色体系
 - `/fleet` 波次级后端分发与自动降级
-- coding 场景下的独立 review / audit / finalize 门禁
+- coding 场景下独立的 review / audit / finalize 门禁
 - evidence-based verify / completion score / delivery audit
 
-从 **v0.6.0** 开始，`ilongrun-coding` 进一步升级为完整的 **Coding Swarm Protocol**：
+从 **v0.7.0** 开始，`ilongrun-coding` 进一步升级为带 Superpowers 方法学强化层的 **Coding Discipline Kernel**：
 
-- 有机器真值：`config/coding-protocol.jsonc`
-- 有内部 playbooks：`skills/ilongrun-coding/*`
-- 有 vendorized 方法库：`vendor/agent-skills/`
-- 有独立 `phase-review` gate
-- 有 `code / test-evidence / security` 三类专项评审
+- 保留原有蜂群骨架：`serial / swarm-wave / super-swarm`
+- 保留原有生命周期：`define → plan → build → verify → review → audit → finalize`
+- 新增方法学真值：`methodologyOverlay / workspaceIsolationPolicy / taskMicrocycle / claimVerificationPolicy / debugPolicy / skillEngineeringPolicy`
+- 新增账本字段：`workspaceIsolation / phaseGuards / claimVerification`
+- 新增 workstream 字段：`specRef / microcycleState / reviewSequence / freshEvidence / rootCauseRecord`
+- finalize 前强制检查 fresh evidence
+- recovery 前强制要求 root cause record
+- skills 本身也进入 lint + pressure scenario 检查链路
 
 ---
 
-## v0.6.0 的核心升级
+## v0.7.0 的核心升级
 
-### 1. `ilongrun-coding` 不再只是“编码纪律文案”
+### 1. `ilongrun-coding` 从 Coding Swarm Protocol 升级为 Coding Discipline Kernel
 
-现在它是一个完整协议层：
+这次不是推翻旧体系，而是在原有蜂群编排之上加上一层更科学的方法学纪律：
 
-- 元技能入口：`skills/ilongrun-coding/SKILL.md`
-- phase playbooks：
-  - `phase-define.md`
-  - `phase-plan.md`
-  - `phase-build.md`
-  - `phase-verify.md`
-  - `phase-review.md`
-  - `phase-ship.md`
-  - `swarm-policy.md`
-  - `js-ts-profile.md`
+- **Spec before execution**：先定义再执行
+- **Isolation before mutation**：先评估工作区隔离再动手
+- **Microcycle per task**：每个 build workstream 都要走固定小闭环
+- **Evidence before claims**：没有 fresh evidence 不得 claim done
+- **Root cause before fix**：没有根因记录不得直接修
 
-### 2. coding run 固定采用新生命周期
+### 2. coding 协议真值继续升级
 
-```text
-phase-define
-→ phase-plan
-→ phase-build
-→ phase-verify
-→ phase-review
-→ phase-audit
-→ phase-finalize
-```
+`config/coding-protocol.jsonc` 现在同时定义：
 
-不再让新的 coding run 复用旧的泛化 `phase-execution`。
+- coding 生命周期
+- swarm 策略
+- review matrix
+- JS/TS 优先画像
+- methodology overlay
+- workspace isolation policy
+- task microcycle
+- claim verification policy
+- debug policy
+- skill engineering policy
 
-### 3. coding 协议字段正式进入 scheduler
+### 3. scheduler / workstream 账本升级
 
-新增顶层字段：
+scheduler 顶层新增：
 
-- `codingProtocol`
-- `swarmPolicy`
-- `dependencyGraph`
-- `reviewMatrix`
+- `workspaceIsolation`
+- `phaseGuards`
+- `claimVerification`
 
-新增 workstream 字段：
+workstream 新增：
 
-- `skillPack`
-- `swarmMode`
-- `writeSet`
-- `handoffArtifacts`
-- `entryCriteria`
-- `exitCriteria`
-- `verificationClass`
-- `reviewRequired`
+- `specRef`
+- `microcycleState`
+- `reviewSequence`
+- `freshEvidence`
+- `rootCauseRecord`
 
-### 4. 独立 `phase-review` gate 成为 finalize 前硬门禁
+### 4. finalize / recovery 更严格
 
-coding run 默认要求以下 review gate：
+- finalize 缺 fresh evidence 时直接阻断
+- failed / blocked workstream 缺 root cause record 时直接阻断 recovery
+- build workstream 未完成 microcycle / review sequence 时，不能算完整完成
 
-- `review-code`
-- `review-test-evidence`
-- `review-security`
+### 5. skill engineering 正式进入协议层
 
-并新增两个专项 agents：
-
-- `agents/ilongrun-test-engineer.agent.md`
-- `agents/ilongrun-security-auditor.agent.md`
-
-### 5. build 波次才允许评估 `/fleet`
-
-从 v0.6.0 开始：
-
-- 仅 `phase-build` 可评估 `/fleet`
-- `review / audit / finalize / git / release` 一律 `internal`
-- 共享上游依赖、但彼此写集不冲突的 build slices，可以合法进入 fleet wave 评估
+- 顶层 skill 的 frontmatter description 改成 `Use when...`
+- `ilongrun-coding` 新增：
+  - `workspace-isolation.md`
+  - `task-microcycle.md`
+  - `claim-verification.md`
+  - `recovery-debug.md`
+  - `skill-engineering.md`
+- 新增 `lint_ilongrun_skills.py`
+- 新增压力场景参考：
+  - `references/skill-engineering-checklist.md`
+  - `references/skill-pressure-scenarios.md`
 
 ---
 
@@ -131,8 +125,7 @@ ilongrun-doctor --notify-test
 - 安装 `~/.copilot-ilongrun/config/coding-protocol.jsonc`
 - 安装 `~/.copilot-ilongrun/vendor/agent-skills/`
 - 输出中文安装看板与 doctor 看板
-
-> 如果你要保留已有的自定义模型策略，请先备份 `~/.copilot-ilongrun/config/model-policy.jsonc`。
+- 在安装看板中显示当前版本号
 
 ---
 
@@ -191,59 +184,30 @@ copilot-ilongrun
 
 ---
 
-## 默认模型与配置文件
-
-主配置文件：
-
-```bash
-~/.copilot-ilongrun/config/model-policy.jsonc
-```
-
-coding 协议文件：
-
-```bash
-~/.copilot-ilongrun/config/coding-protocol.jsonc
-```
-
-vendor 快照目录：
-
-```bash
-~/.copilot-ilongrun/vendor/agent-skills/
-```
-
-### 默认命令 → 模型映射
-
-| 命令 | 默认模型 |
-|------|----------|
-| `ilongrun` / `status` / `prompt` / `resume` / `doctor` | `claude-sonnet-4.6` |
-| `ilongrun-coding` | `claude-opus-4.6` |
-| coding 最终终审 | `gpt-5.4` |
-
-### 选模优先级
-
-```text
---model > commandDefaults > skillDefaults > roleModels > fallback
-```
-
----
-
 ## coding run 的本质是什么
 
-从 v0.6.0 开始，coding run 不再只是“生成很多 task-list”。
+从 v0.7.0 开始，coding run 不再只是“带 review gate 的 coding swarm”。
 
 它本质上是一个：
 
-> **带依赖图、wave、write set、handoff 合同、review matrix 和 release blocker 的长运行编码协议。**
+> **带依赖图、wave、write set、handoff 合同、方法学门禁、review matrix 和 release blocker 的长运行编码协议内核。**
 
 ### 默认 coding phases
 
 - `phase-define`：锁定目标、边界、假设、成功标准
 - `phase-plan`：生成依赖图、wave 划分、worker mini-contract
 - `phase-build`：按 slice 推进 build，并在必要时评估 `/fleet`
-- `phase-verify`：固定测试/构建/接线/运行证据
+- `phase-verify`：固定测试 / 构建 / 接线 / 运行证据
 - `phase-review`：执行 code / test-evidence / security 三类专项评审
 - `phase-audit`：最终终审与 release blocker 裁决
 - `phase-finalize`：完成态收尾、completion 报告、发布前闭环
+
+### 0.7.0 新增的关键方法学门禁
+
+- `workspaceIsolation`
+- `taskMicrocycle`
+- `claimVerification`
+- `rootCauseBeforeFix`
 
 ### review gate 默认要求
 
@@ -303,21 +267,22 @@ status / verify / completion score 都会读取这些证据。
 
 - [快速开始](./docs/快速开始.md)
 - [架构与运行机制](./docs/架构与运行机制.md)
-- [发版说明 v0.6.0](./docs/发版说明-v0.6.0.md)
+- [Superpowers 研究方案](./docs/ilongrun+superpowers.md)
+- [发版说明 v0.7.0](./docs/发版说明-v0.7.0.md)
 - [更新日志](./CHANGELOG.md)
 
 ---
 
 ## 开发与发布
 
-当前版本：**0.6.0**
+当前版本：**0.7.0**
 
 推荐发布流程：
 
 1. 在功能分支完成实现与自测
 2. 合并到 `main`
-3. 打 tag：`v0.6.0`
-4. 以 `docs/发版说明-v0.6.0.md` 作为 GitHub Release 正文
+3. 打 tag：`v0.7.0`
+4. 以 `docs/发版说明-v0.7.0.md` 作为 GitHub Release 正文
 
 ---
 

@@ -135,7 +135,7 @@ def main() -> int:
     print(board_line("🤖 执行模型", model_value(selected, config)))
     print(board_line("🔍 最终终审", model_value(audit_model, config)))
     if profile == "coding":
-        print(board_line("🧬 Coding 协议", tone("soft", f"{coding_protocol.get('version') or '0.6.0'} / {swarm_policy.get('activeMode') or mode}")))
+        print(board_line("🧬 Coding 协议", tone("soft", f"{coding_protocol.get('version') or '0.7.0'} / {swarm_policy.get('activeMode') or mode}")))
     print(board_line("🕐 最近更新", tone("soft", updated)))
     print(left_border())
     print(open_bottom())

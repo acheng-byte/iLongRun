@@ -13,6 +13,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from _ilongrun_report_templates import build_completion_report_markdown
 from _ilongrun_lib import (
     adjudication_path,
+    claim_verification_is_complete,
     completion_path,
     final_review_path,
     persist_run_ledger,
@@ -83,6 +84,12 @@ def main() -> int:
         sched["deliverables"] = [item for item in args.delivered_artifact if item]
     verification = verify_scheduler(target, sched, finalize_candidate=True) if args.local_verify else {"ok": True, "hardFailures": [], "softWarnings": [], "driftFindings": [], "recommendedAction": "continue", "failureClass": None}
     if args.status == "complete" and sched.get("profile") == "coding":
+        claim_verification = sched.get("claimVerification") or {}
+        if not claim_verification_is_complete(claim_verification) and not args.force_complete:
+            verification["ok"] = False
+            verification.setdefault("hardFailures", []).append(
+                f"claimVerification incomplete: {', '.join(claim_verification.get('missingWorkstreams') or []) or 'unknown'}"
+            )
         if not final_review_path(target).exists() and not args.force_complete:
             verification["ok"] = False
             verification.setdefault("hardFailures", []).append("reviews/gpt54-final-review.md is missing")

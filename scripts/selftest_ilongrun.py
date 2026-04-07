@@ -47,6 +47,62 @@ def assert_notify_target(payload: dict, expected: Path) -> None:
     assert payload.get("resolvedOpen", "") == str(expected.resolve())
 
 
+def completed_status_payload(ws: dict, *, stamp: str = "2026-04-07T00:01:00Z") -> dict:
+    phase_id = str(ws.get("phaseId") or "")
+    payload = {
+        "id": ws["id"],
+        "status": "complete",
+        "startedAt": "2026-04-07T00:00:00Z",
+        "completedAt": stamp,
+        "specRef": ws.get("specRef"),
+        "microcycleState": ws.get("microcycleState") or {},
+        "reviewSequence": ws.get("reviewSequence") or {},
+        "freshEvidence": ws.get("freshEvidence") or {},
+        "rootCauseRecord": ws.get("rootCauseRecord") or {},
+    }
+    if phase_id == "phase-build":
+        payload["microcycleState"] = {
+            "required": True,
+            "status": "complete",
+            "currentStep": "handoff",
+            "steps": [
+                {"id": "spec-lock", "status": "done"},
+                {"id": "red", "status": "done"},
+                {"id": "verify-red", "status": "done"},
+                {"id": "green", "status": "done"},
+                {"id": "verify-green", "status": "done"},
+                {"id": "self-review", "status": "done"},
+                {"id": "spec-review", "status": "done"},
+                {"id": "quality-review", "status": "done"},
+                {"id": "handoff", "status": "done"},
+            ],
+            "lastUpdatedAt": stamp,
+        }
+        payload["reviewSequence"] = {
+            "required": True,
+            "status": "complete",
+            "selfReview": "complete",
+            "specReview": "complete",
+            "qualityReview": "complete",
+            "lastUpdatedAt": stamp,
+        }
+    if phase_id in {"phase-build", "phase-verify"}:
+        payload["freshEvidence"] = {
+            "required": True,
+            "status": "complete",
+            "items": [
+                {
+                    "command": "python3 -m pytest",
+                    "observedAt": stamp,
+                    "exitCode": 0,
+                    "summary": f"{ws['id']} fresh evidence",
+                }
+            ],
+            "lastUpdatedAt": stamp,
+        }
+    return payload
+
+
 def main() -> int:
     temp_root = Path(tempfile.mkdtemp(prefix="ilongrun-selftest-"))
     try:
@@ -85,7 +141,9 @@ def main() -> int:
             "phase-audit",
             "phase-finalize",
         ]
-        assert (prepared_scheduler.get("codingProtocol") or {}).get("version") == "0.6.0"
+        assert (prepared_scheduler.get("codingProtocol") or {}).get("version") == "0.7.0"
+        assert (prepared_scheduler.get("workspaceIsolation") or {}).get("enabled") is True
+        assert (prepared_scheduler.get("phaseGuards") or {}).get("claimVerification")
         assert (prepared_scheduler.get("reviewMatrix") or {}).get("gates")
 
         model_info_run = run(
@@ -130,12 +188,12 @@ def main() -> int:
             "--command-bin-dir", str(temp_root / "bin"),
             "--helper-dir", str(temp_root / "helpers"),
             "--model-config", str(ROOT.parent / "config" / "model-policy.jsonc"),
-            "--version", "0.6.0",
+            "--version", "0.7.0",
         )
         assert "知识船仓·公益社区" in install_board.stdout
         assert "倾力制作～" in install_board.stdout
         assert "====" in install_board.stdout
-        assert "v0.6.0" in install_board.stdout
+        assert "v0.7.0" in install_board.stdout
 
         doctor_checks = temp_root / "doctor-checks.tsv"
         doctor_checks.write_text(
@@ -151,6 +209,11 @@ def main() -> int:
                     "copilot\tok\t/tmp/copilot",
                     "login\tok\ttest-user@https://github.com",
                     "model_policy\tok\t/tmp/model-policy.jsonc",
+                    "coding_protocol\tok\t/tmp/coding-protocol.jsonc",
+                    "vendor_snapshot\tok\t/tmp/vendor/agent-skills",
+                    "coding_playbooks\tok\t/tmp/skills/ilongrun-coding",
+                    "coding_agents\tok\t/tmp/agents",
+                    "skill_lint\tok\t/tmp/lint_ilongrun_skills.py",
                     "legacy_plugin\tok\t未启用（copilot-mission-control）",
                     "workspace_legacy\tok\t未发现旧工作区残留",
                     "screen\tok\t/usr/bin/screen",
@@ -207,6 +270,37 @@ def main() -> int:
         assert "环境体检看板" in doctor_board.stdout
         assert "模型缓存刷新结果" in doctor_board.stdout
         assert "倾力制作～" in doctor_board.stdout
+
+        bad_skill = temp_root / "bad-skill" / "SKILL.md"
+        bad_skill.parent.mkdir(parents=True, exist_ok=True)
+        bad_skill.write_text(
+            "---\nname: demo\ndescription: A long summary instead of a trigger.\n---\n\n## Demo\n",
+            encoding="utf-8",
+        )
+        lint_fail = run(
+            str(ROOT / "lint_ilongrun_skills.py"),
+            "--path", str(bad_skill),
+            "--json",
+            ok=False,
+        )
+        lint_fail_payload = json.loads(lint_fail.stdout)
+        assert lint_fail.returncode != 0
+        assert "Use when" in " ".join(lint_fail_payload["results"][0]["findings"])
+        bad_skill.write_text(
+            "---\nname: demo\ndescription: Use when you need a tiny demo skill.\n---\n\n## Demo\n\n- ok\n",
+            encoding="utf-8",
+        )
+        lint_fix = run(
+            str(ROOT / "lint_ilongrun_skills.py"),
+            "--path", str(bad_skill),
+            "--json",
+        )
+        assert json.loads(lint_fix.stdout)["ok"] is True
+        lint_repo = run(
+            str(ROOT / "lint_ilongrun_skills.py"),
+            "--json",
+        )
+        assert json.loads(lint_repo.stdout)["ok"] is True
 
         coding_workspace = temp_root / "coding-workspace"
         coding_workspace.mkdir(parents=True, exist_ok=True)
@@ -333,7 +427,7 @@ def main() -> int:
         assert any(item.get("fallbackReason") == "command-not-recognized" for item in fleet_dispatch.get("dispatchEvents") or [])
 
         for ws in workstreams:
-            ws_status = {"id": ws["id"], "status": "complete"}
+            ws_status = completed_status_payload(ws)
             (run_dir / ws["statusPath"]).write_text(json.dumps(ws_status, ensure_ascii=False, indent=2), encoding="utf-8")
             (run_dir / ws["resultPath"]).write_text("# Result\n\nDone.\n", encoding="utf-8")
             (run_dir / ws["evidencePath"]).write_text("# Evidence\n\nVerified.\n", encoding="utf-8")
@@ -395,6 +489,7 @@ def main() -> int:
         assert status_board.returncode == 0
         assert "状态看板" in status_board.stdout
         assert "真实完成度" in status_board.stdout
+        assert "方法学门禁" in status_board.stdout
         assert "账本与投影" in status_board.stdout
         assert "投影日志" in status_board.stdout
         assert "分发证据" in status_board.stdout
@@ -432,22 +527,17 @@ def main() -> int:
         ledger_scheduler.setdefault("mission", {})["requestedDeliverables"] = []
         for ws in ledger_scheduler.get("workstreams") or []:
             ws["status"] = "complete"
+            ws["microcycleState"] = completed_status_payload(ws)["microcycleState"]
+            ws["reviewSequence"] = completed_status_payload(ws)["reviewSequence"]
+            ws["freshEvidence"] = completed_status_payload(ws)["freshEvidence"]
+            ws["rootCauseRecord"] = completed_status_payload(ws)["rootCauseRecord"]
             ws.pop("index", None)
             ws.pop("taskListId", None)
             ws.pop("taskListPath", None)
             status_path = ledger_run_dir / ws["statusPath"]
             status_path.parent.mkdir(parents=True, exist_ok=True)
             status_path.write_text(
-                json.dumps(
-                    {
-                        "id": ws["id"],
-                        "status": "done",
-                        "startedAt": "2026-04-07T00:00:00Z",
-                        "completedAt": "2026-04-07T00:01:00Z",
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
+                json.dumps(completed_status_payload(ws), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             (ledger_run_dir / ws["resultPath"]).write_text("# Result\n\nDone.\n", encoding="utf-8")
