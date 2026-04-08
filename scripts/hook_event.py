@@ -10,7 +10,15 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from _ilongrun_lib import completion_path, is_run_complete_state, persist_run_ledger, reconcile_scheduler, resolve_run_target, verify_scheduler
+from _ilongrun_lib import (
+    completion_path,
+    is_run_complete_state,
+    persist_run_ledger,
+    reconcile_scheduler,
+    resolve_run_target,
+    terminal_report_path,
+    verify_scheduler,
+)
 from _ilongrun_shared import append_jsonl, now_iso, read_json, read_text, resolve_workspace, write_json_atomic
 
 
@@ -80,7 +88,12 @@ def main() -> int:
             target = resolve_run_target(cwd, run_id)
         except Exception:
             target = None
-        if str(scheduler.get('state') or '').lower() in {'complete', 'completed', 'finalized'} and target and completion_path(target).exists():
+        if (
+            target
+            and is_run_complete_state(scheduler.get("state"))
+            and completion_path(target).exists()
+            and str((scheduler.get("verification") or {}).get("state") or "").lower() == "passed"
+        ):
             active_path.unlink(missing_ok=True)
             run_id = ''
         else:

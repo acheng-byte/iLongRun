@@ -89,7 +89,7 @@ def ref_exists(skill_path: Path, ref: str, skills_root: Path) -> bool:
         return True
     if "*" in raw:
         return True
-    if raw in {"mission.md", "strategy.md", "plan.md", "scheduler.json", "COMPLETION.md", "task-list-N.md"}:
+    if raw in {"mission.md", "strategy.md", "plan.md", "scheduler.json", "COMPLETION.md", "BLOCKED.md", "FAILED.md", "task-list-N.md"}:
         return True
     if raw.startswith("workstreams/") or raw.startswith("reviews/"):
         return True

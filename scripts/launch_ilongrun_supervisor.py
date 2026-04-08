@@ -559,7 +559,7 @@ def maybe_finalize_complete(workspace: Path, run_ref: str) -> bool:
     except Exception:
         return False
     sched = reconcile_scheduler(target)
-    verification = verify_scheduler(target, sched)
+    verification = verify_scheduler(target, sched, finalize_candidate=True)
     if not verification.get("ok"):
         return False
     finalize = SCRIPT_DIR / "finalize_ilongrun_run.py"
@@ -569,7 +569,7 @@ def maybe_finalize_complete(workspace: Path, run_ref: str) -> bool:
             str(finalize),
             "--workspace", str(workspace),
             "--run-id", run_ref,
-            "--status", "complete",
+            "--status", "completed",
             "--headline", "ILongRun auto-finalized after verification",
             "--local-verify",
         ],
@@ -589,6 +589,7 @@ def maybe_finalize_blocked(workspace: Path, run_ref: str, note: str) -> None:
             "--status", "blocked",
             "--headline", note,
             "--blocker", note,
+            "--local-verify",
         ],
         check=False,
     )
@@ -752,9 +753,6 @@ def main() -> int:
                     return 1
                 if maybe_finalize_complete(workspace, run_ref):
                     return 0
-                verification = verify_scheduler(resolve_run_target(workspace, run_ref), read_json(scheduler_path(resolve_run_target(workspace, run_ref)), {}))
-                if verification.get("ok"):
-                    return 0
                 maybe_finalize_blocked(workspace, run_ref, "ILongRun verification failed after execution")
                 return 1
             return 0
@@ -801,6 +799,8 @@ def main() -> int:
                         return 1
                     if maybe_finalize_complete(workspace, run_ref):
                         return 0
+                    maybe_finalize_blocked(workspace, run_ref, "ILongRun verification failed after retry execution")
+                    return 1
                 return 0
         if run_ref:
             maybe_finalize_blocked(workspace, run_ref, f"{fallback_reason}; exhausted fallback chain and backoff budget")

@@ -623,16 +623,24 @@ else:
         add("workspace_run_action", "info", str(payload.get("recommendedAction")))
 
     findings = hard + drift
-    state_conflict = next((item for item in findings if "top-level scheduler status" in item), "")
+    state_conflict = next((item for item in findings if "scheduler.status" in item or "invalid canonical scheduler.state" in item), "")
     add("workspace_run_state_conflict", "fail" if state_conflict else "skip", state_conflict or "未发现 top-level state/status 冲突")
 
     active_pointer = next((item for item in findings if "active-run-id" in item), "")
     add("workspace_run_active_pointer", "fail" if active_pointer else "skip", active_pointer or "未发现已完成 run 的 active 指针残留")
 
-    finalize_issue = next((item for item in findings if "COMPLETION.md is missing" in item or "reviews/final-review.md is missing" in item or "reviews/adjudication.md is missing" in item), "")
-    add("workspace_run_finalize", "fail" if finalize_issue else "skip", finalize_issue or "未发现 finalize 必备产物缺失")
+    finalize_issue = next((
+        item for item in findings
+        if "COMPLETION.md" in item
+        or "BLOCKED.md" in item
+        or "FAILED.md" in item
+        or "reviews/final-review.md is missing" in item
+        or "reviews/adjudication.md is missing" in item
+        or "running run must not contain terminal summary documents" in item
+    ), "")
+    add("workspace_run_finalize", "fail" if finalize_issue else "skip", finalize_issue or "未发现终态摘要或 finalize 门禁异常")
 
-    placeholder_issue = next((item for item in findings if "workstream claims complete without full evidence" in item), "")
+    placeholder_issue = next((item for item in findings if "workstream marked done without structured evidence" in item), "")
     add("workspace_run_review_placeholder", "fail" if placeholder_issue else "skip", placeholder_issue or "未发现 review/result/evidence 伪完成")
 
     pollution_issue = next((item for item in findings if "workspace tracks generated artifacts" in item), "")

@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+## v0.9.0
+
+### 破坏性账本重构
+- **新 run 直接切到全新 canonical 状态机**：`scheduler.json.state` 只允许 `running / blocked / completed / failed`，不再兼容历史 `complete / finalized` 或 top-level `status`
+- **旧 run 不再作为执行面兼容对象**：新的 verify / finalize / doctor 只面向新账本规则；历史 run 仅保留人工复盘价值
+- **终态文档彻底分离**：`COMPLETION.md` 只属于 `completed`，`BLOCKED.md` 只属于 `blocked`，`FAILED.md` 只属于 `failed`
+
+### 收尾链路与 Gate Enforcement
+- **收尾链路改为严格单向**：review → audit → adjudication → finalize，`adjudication.md` 只能在有效 `final-review.md` 之后生成
+- **`proceed-to-finalize` / `return-for-fix` 成为唯一裁决决策**：前者才允许 `completed`，后者直接把 run 置为 `blocked`
+- **`verification` 改成辅助诊断层**：不能再与 run 终态打架；`blocked / failed` run 保留 `verification.state=passed` 会被直接判错
+- **`claimVerification` 成为 completed 的强前置**：fresh evidence 未收敛时，finalize 无法落成 `completed`
+
+### workstream 与投影一致性
+- **define / plan 的 result/evidence 改为系统自动写实**：完成后会自动生成结构化结果与证据，不再允许 `Pending result/evidence` 模板混入 done 状态
+- **伪完成升级为硬失败**：workstream 标记 done 但缺结构化 result/evidence 时，verify 直接 hard-fail
+- **运行中 delivery audit 降噪**：严格的 fake-completion 判定推迟到 final audit / terminal 校验阶段，减少 BUILD 中途噪音
+
+### 诊断与可视化
+- **status board 识别三类终态摘要**：看板会明确展示 `COMPLETION.md / BLOCKED.md / FAILED.md` 是否与 `scheduler.state` 一致
+- **doctor 的当前工作区 run 健康区块升级**：新增对 terminal doc 错配、legacy `scheduler.status`、blocked/failed 误写 completion 的检查
+- **通知链路对 blocked/failed 分流**：`blocked` 默认打开 `BLOCKED.md`，失败路径打开 `FAILED.md`
+
+### 文档与回归
+- **README / 快速开始改口**：明确新账本不兼容旧 run、三类终态摘要的语义、以及真正 completed 的判定条件
+- **新增终态状态机重构蓝图**：补充 `docs/终态状态机与收尾链路重构蓝图.md`
+- **新增发版说明**：补充 `docs/发版说明-v0.9.0.md`
+- **selftest 重写终态断言**：覆盖 completed/block/failed 分离、placeholder-done 硬失败、legacy `scheduler.status` 拒绝、blocked 不清 active 指针
+
 ## v0.8.4
 
 ### 账本真值与完成态加固

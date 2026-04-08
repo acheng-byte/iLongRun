@@ -23,8 +23,10 @@ scheduler.json + workstreams/*/status.json
 
 其中：
 
-- `scheduler.json` 的 **top-level `state`** 是 run 完成态的唯一真值
-- top-level `status` 只作为 legacy 兼容读取；如果它和 `state` 冲突，会被 verify / doctor 直接判定为 drift
+- `scheduler.json` 的 **top-level `state`** 是 run 主状态的唯一真值
+- 新 run 只允许 `running / blocked / completed / failed` 四种 canonical state
+- top-level `status` 已被废弃；新 run 一旦出现 `scheduler.status`，verify / doctor 会直接判定为硬失败
+- 从 `v0.9.0` 开始不再兼容旧 run 账本；历史 run 只适合作为人工复盘样本
 
 Markdown 文件（`mission.md`、`strategy.md`、`plan.md`、`task-list-N.md`）主要是给人看的投影，不是最终真值。
 
@@ -180,7 +182,9 @@ ilongrun-model reset
 - `workstreams/ws-*/status.json`：每个子任务的真实状态
 - `reviews/final-review.md`：最终终审报告
 - `reviews/adjudication.md`：裁决报告
-- `COMPLETION.md`：完成态总结
+- `COMPLETION.md`：仅 `completed` run 生成
+- `BLOCKED.md`：仅 `blocked` run 生成
+- `FAILED.md`：仅 `failed` run 生成
 
 ## 9. 架构图（简化版）
 
@@ -211,10 +215,11 @@ ilongrun-resume latest
 
 ### Q3：我怎么知道它有没有真的完成？
 
-看两个地方：
+先看 `scheduler.json.state`，再看与之匹配的终态摘要：
 
-- `ilongrun-status latest`
-- `.copilot-ilongrun/runs/<run-id>/COMPLETION.md`
+- `completed` → `.copilot-ilongrun/runs/<run-id>/COMPLETION.md`
+- `blocked` → `.copilot-ilongrun/runs/<run-id>/BLOCKED.md`
+- `failed` → `.copilot-ilongrun/runs/<run-id>/FAILED.md`
 
 coding 任务还要关注：
 
@@ -223,9 +228,10 @@ coding 任务还要关注：
 
 补充：
 
-- 如果 `COMPLETION.md` 缺失，即使 `scheduler.json` 里出现 completed/complete，也不算真正闭环完成
-- 如果 `active-run-id` 还指向一个已完成 run，也说明 finalize 没有真正收尾干净
-- `ilongrun-doctor` 现在会直接把这些问题显示在“当前工作区 Run 健康”区块
+- 只有 `state=completed` + `COMPLETION.md` 存在 + `active-run-id` 已清理，才算真正闭环完成
+- `state=blocked` 时必须看 `BLOCKED.md`，它表示 run 已阻断结束，不是成功完成
+- `state=failed` 时必须看 `FAILED.md`，它表示 run 已失败结束
+- `ilongrun-doctor` 会把终态摘要缺失、终态文档错配、active 指针残留等问题直接显示在“当前工作区 Run 健康”区块
 
 ### Q4：`--model` 到底控制到什么程度？
 

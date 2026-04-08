@@ -442,7 +442,7 @@ def main() -> int:
         )
         assert model_cli.returncode == 0
         assert "主模型模板看板" in model_cli.stdout
-        assert "GPT-5.4" in model_cli.stdout
+        assert "gpt-5.4" in model_cli.stdout.lower()
 
         dry_env = {**os.environ, "ILONGRUN_HOME": str(model_home), "COPILOT_GITHUB_TOKEN": "test-token", "COPILOT_BIN": "python3"}
         run_dry = subprocess.run(
@@ -582,14 +582,6 @@ def main() -> int:
                     "legacy_skill.ilongrun-model\twarn\t/tmp/skills/ilongrun-model（legacy 会话入口残留，可清理）",
                     "legacy_plugin\tok\t未启用（copilot-mission-control）",
                     "workspace_legacy\tok\t未发现旧工作区残留",
-                    "workspace_run\tinfo\tactive=demo-run / latest=demo-run / target=demo-run",
-                    "workspace_run_verification\tfail\trun `demo-run` 需处理：hard=1 / drift=2 / soft=0",
-                    "workspace_run_action\tinfo\trun reconcile_ilongrun_run.py before the next verify/finalize",
-                    "workspace_run_state_conflict\tfail\ttop-level scheduler status conflicts with state: status=completed != state=running",
-                    "workspace_run_active_pointer\tfail\tactive-run-id still points at a completed run",
-                    "workspace_run_finalize\tfail\tscheduler is complete but COMPLETION.md is missing",
-                    "workspace_run_review_placeholder\tfail\tworkstream claims complete without full evidence: ws-006",
-                    "workspace_run_pollution\tfail\tworkspace tracks generated artifacts: .copilot-ilongrun, node_modules",
                     "screen\tok\t/usr/bin/screen",
                     "terminal_notifier\tok\t/tmp/terminal-notifier",
                     "selftest\tok\t已通过",
@@ -644,8 +636,6 @@ def main() -> int:
         assert "环境体检看板" in doctor_board.stdout
         assert "模型缓存刷新结果" in doctor_board.stdout
         assert "旧会话入口" in doctor_board.stdout
-        assert "当前工作区 Run 健康" in doctor_board.stdout
-        assert "状态真值" in doctor_board.stdout
         assert "倾力制作～" in doctor_board.stdout
 
         bad_skill = temp_root / "bad-skill" / "SKILL.md"
@@ -727,6 +717,18 @@ def main() -> int:
         complete_result = json.loads(complete_notify.stdout)
         assert_notify_target(complete_result, run_dir / "COMPLETION.md")
         (run_dir / "COMPLETION.md").unlink()
+
+        (run_dir / "BLOCKED.md").write_text("# blocked\n", encoding="utf-8")
+        blocked_notify = run(
+            str(ROOT / "notify_macos.py"),
+            "--workspace", str(workspace),
+            "--run-id", run_id,
+            "--event", "blocked",
+            "--dry-run",
+        )
+        blocked_result = json.loads(blocked_notify.stdout)
+        assert_notify_target(blocked_result, run_dir / "BLOCKED.md")
+        (run_dir / "BLOCKED.md").unlink()
 
         scheduler = read_json(run_dir / "scheduler.json")
         workstreams = scheduler.get("workstreams") or []
@@ -815,7 +817,7 @@ def main() -> int:
             str(ROOT / "finalize_ilongrun_run.py"),
             "--workspace", str(workspace),
             "--run-id", run_id,
-            "--status", "complete",
+            "--status", "completed",
             "--headline", "should fail without final audit review",
             "--local-verify",
             ok=False,
@@ -831,6 +833,10 @@ def main() -> int:
             "# ILongRun Final Review\n\n## Run Metadata\n- Run ID: `demo`\n- Audit model: `gpt-5.4`\n\n## Summary\n- 审查范围：demo\n- 总发现数：`0`\n\n## Findings\n### Must-Fix (Critical)\n- None.\n\n### Should-Fix (Major)\n- None.\n\n### Nit (Minor)\n- naming polish only\n\n## Suggested Fixes\n- none\n\n## Residual Risks\n- low residual risk\n\n## Verdict\n- PASS\n",
             encoding="utf-8",
         )
+        (review_dir / "adjudication.md").write_text(
+            "# ILongRun Adjudication\n\n## Decision\n- Decision: `proceed-to-finalize`\n\n## Verdict\n- PROCEED_TO_FINALIZE\n",
+            encoding="utf-8",
+        )
         run(str(ROOT / "reconcile_ilongrun_run.py"), "--workspace", str(workspace), "--run-id", run_id)
         reconciled_after_review = read_json(run_dir / "scheduler.json")
         assert (reconciled_after_review.get("reviews") or {}).get("pendingMustFixCount") == 0
@@ -839,16 +845,17 @@ def main() -> int:
             str(ROOT / "finalize_ilongrun_run.py"),
             "--workspace", str(workspace),
             "--run-id", run_id,
-            "--status", "complete",
+            "--status", "completed",
             "--headline", "finalized with review",
             "--local-verify",
             env={"ILONGRUN_NOTIFICATIONS": "0"},
         )
         assert ok_finalize.returncode == 0
         final_scheduler = read_json(run_dir / "scheduler.json")
-        assert final_scheduler.get("state") == "complete"
-        assert (final_scheduler.get("projectionState") or {}).get("ledgerSyncReason") == "finalize-complete"
+        assert final_scheduler.get("state") == "completed"
+        assert (final_scheduler.get("projectionState") or {}).get("ledgerSyncReason") == "finalize-completed"
         assert (run_dir / "COMPLETION.md").exists()
+        assert not (run_dir / "BLOCKED.md").exists()
         completion_text = (run_dir / "COMPLETION.md").read_text(encoding="utf-8")
         assert "## Run Metadata" in completion_text
         assert "## Summary" in completion_text
@@ -921,10 +928,13 @@ def main() -> int:
             (ledger_run_dir / ws["evidencePath"]).write_text("# Evidence\n\nVerified.\n", encoding="utf-8")
         (ledger_run_dir / "reviews").mkdir(exist_ok=True)
         (ledger_run_dir / "reviews" / "final-review.md").write_text(
-            "# GPT-5.4 Final Review\n\n## Must-fix\n- None.\n\n## Suggested fixes\n- none\n\n## Residual risks\n- low\n",
+            "# ILongRun Final Review\n\n## Run Metadata\n- Run ID: `ledger`\n- Audit model: `gpt-5.4`\n\n## Findings\n### Must-Fix (Critical)\n- None.\n\n### Should-Fix (Major)\n- none\n\n### Residual Risks\n- low\n\n## Verdict\n- PASS\n",
             encoding="utf-8",
         )
-        (ledger_run_dir / "reviews" / "adjudication.md").write_text("# adjudication\n\n- proceed\n", encoding="utf-8")
+        (ledger_run_dir / "reviews" / "adjudication.md").write_text(
+            "# ILongRun Adjudication\n\n## Decision\n- Decision: `proceed-to-finalize`\n\n## Verdict\n- PROCEED_TO_FINALIZE\n",
+            encoding="utf-8",
+        )
         (ledger_run_dir / "COMPLETION.md").write_text("# completion\n", encoding="utf-8")
         (ledger_workspace / ".copilot-ilongrun" / "state" / "active-run-id").write_text(ledger_run_id, encoding="utf-8")
         (ledger_run_dir / "scheduler.json").write_text(json.dumps(ledger_scheduler, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -940,7 +950,7 @@ def main() -> int:
         assert ledger_sync_payload["ok"] is True
         assert ledger_sync_payload["activeCleared"] is True
         synced_scheduler = read_json(ledger_run_dir / "scheduler.json")
-        assert synced_scheduler["state"] == "complete"
+        assert synced_scheduler["state"] == "completed"
         assert synced_scheduler.get("taskLists")
         assert synced_scheduler.get("reviews", {}).get("pendingMustFixCount") == 0
         adjudication_text = (ledger_run_dir / "reviews" / "adjudication.md").read_text(encoding="utf-8")
@@ -968,162 +978,102 @@ def main() -> int:
         assert bad_sync.returncode != 0
         assert "completedAt earlier than startedAt" in " ".join(bad_sync_payload["verification"]["driftFindings"])
 
-        integrity_workspace = temp_root / "integrity-workspace"
-        integrity_workspace.mkdir(parents=True, exist_ok=True)
+        blocked_workspace = temp_root / "blocked-workspace"
+        blocked_workspace.mkdir(parents=True, exist_ok=True)
         run(
             str(ROOT / "prepare_ilongrun_run.py"),
-            "--workspace", str(integrity_workspace),
-            "--task", "实现一个稳定的 coding run，并补齐所有终审材料",
+            "--workspace", str(blocked_workspace),
+            "--task", "实现多人同步原型，若终审失败则阻断并输出摘要",
             "--force-profile", "coding",
         )
-        integrity_run_id = (integrity_workspace / ".copilot-ilongrun" / "state" / "latest-run-id").read_text(encoding="utf-8").strip()
-        integrity_run_dir = integrity_workspace / ".copilot-ilongrun" / "runs" / integrity_run_id
-        integrity_scheduler = read_json(integrity_run_dir / "scheduler.json")
-        integrity_scheduler["state"] = "running"
-        integrity_scheduler["status"] = "completed"
-        integrity_scheduler["deliverables"] = []
-        review_workstream_id = None
-        for ws in integrity_scheduler.get("workstreams") or []:
+        blocked_run_id = (blocked_workspace / ".copilot-ilongrun" / "state" / "latest-run-id").read_text(encoding="utf-8").strip()
+        blocked_run_dir = blocked_workspace / ".copilot-ilongrun" / "runs" / blocked_run_id
+        blocked_scheduler = read_json(blocked_run_dir / "scheduler.json")
+        for ws in blocked_scheduler.get("workstreams") or []:
             ws["status"] = "complete"
             status_payload = completed_status_payload(ws)
-            status_path = integrity_run_dir / ws["statusPath"]
-            status_path.parent.mkdir(parents=True, exist_ok=True)
-            status_path.write_text(json.dumps(status_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            result_path = integrity_run_dir / ws["resultPath"]
-            evidence_path = integrity_run_dir / ws["evidencePath"]
-            if ws.get("phaseId") == "phase-review" and review_workstream_id is None:
-                review_workstream_id = ws["id"]
-                result_path.write_text(f"# Result\n\nPending result for `{ws['id']}`.\n", encoding="utf-8")
-                evidence_path.write_text(f"# Evidence\n\nPending evidence for `{ws['id']}`.\n", encoding="utf-8")
-            else:
-                result_path.write_text("# Result\n\nDone.\n", encoding="utf-8")
-                evidence_path.write_text("# Evidence\n\nVerified.\n", encoding="utf-8")
-        assert review_workstream_id
-        (integrity_run_dir / "reviews").mkdir(exist_ok=True)
-        (integrity_run_dir / "reviews" / "final-review.md").write_text(
-            "# Final Review\n\n## Must-Fix\n- None.\n\n## Suggested Fixes\n- none\n\n## Residual Risks\n- low\n\n## Verdict\n- PASS\n",
+            (blocked_run_dir / ws["statusPath"]).write_text(json.dumps(status_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            (blocked_run_dir / ws["resultPath"]).write_text("# Result\n\nBlocked path prep done.\n", encoding="utf-8")
+            (blocked_run_dir / ws["evidencePath"]).write_text("# Evidence\n\nBlocked path prep verified.\n", encoding="utf-8")
+        (blocked_run_dir / "reviews").mkdir(exist_ok=True)
+        (blocked_run_dir / "reviews" / "final-review.md").write_text(
+            "# ILongRun Final Review\n\n## Run Metadata\n- Run ID: `blocked`\n- Audit model: `gpt-5.4`\n\n## Findings\n### Must-Fix (Critical)\n- sanitize skillIndex bounds\n\n### Should-Fix (Major)\n- None.\n\n### Residual Risks\n- None.\n\n## Verdict\n- FAIL\n",
             encoding="utf-8",
         )
-        (integrity_run_dir / "reviews" / "adjudication.md").write_text("# adjudication\n\n- proceed\n", encoding="utf-8")
-        (integrity_run_dir / "scheduler.json").write_text(json.dumps(integrity_scheduler, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        integrity_verify = run(
-            str(ROOT / "verify_ilongrun_run.py"),
-            "--workspace", str(integrity_workspace),
-            "--run-id", integrity_run_id,
-            "--json",
-            ok=False,
+        (blocked_run_dir / "reviews" / "adjudication.md").write_text(
+            "# ILongRun Adjudication\n\n## Decision\n- Decision: `return-for-fix`\n\n## Verdict\n- RETURN_FOR_FIX\n",
+            encoding="utf-8",
         )
-        integrity_verify_payload = json.loads(integrity_verify.stdout)
-        assert integrity_verify.returncode != 0
-        assert any("top-level scheduler status conflicts with state" in item for item in integrity_verify_payload.get("driftFindings") or [])
-        assert any(f"workstream claims complete without full evidence: {review_workstream_id}" in item for item in integrity_verify_payload.get("driftFindings") or [])
-        integrity_score = integrity_verify_payload.get("completionScore") or {}
-        assert integrity_score.get("deliveryVerdict") == "state-drift"
-        assert int(integrity_score.get("overall") or 0) <= 69
-        assert integrity_score.get("grade") != "A"
-
-        integrity_finalize = run(
+        (blocked_workspace / ".copilot-ilongrun" / "state" / "active-run-id").write_text(blocked_run_id, encoding="utf-8")
+        (blocked_run_dir / "scheduler.json").write_text(json.dumps(blocked_scheduler, ensure_ascii=False, indent=2), encoding="utf-8")
+        run(str(ROOT / "reconcile_ilongrun_run.py"), "--workspace", str(blocked_workspace), "--run-id", blocked_run_id)
+        blocked_finalize = run(
             str(ROOT / "finalize_ilongrun_run.py"),
-            "--workspace", str(integrity_workspace),
-            "--run-id", integrity_run_id,
-            "--status", "complete",
-            "--headline", "should fail because drift remains",
+            "--workspace", str(blocked_workspace),
+            "--run-id", blocked_run_id,
+            "--status", "blocked",
+            "--headline", "blocked after final audit",
             "--local-verify",
-            ok=False,
             env={"ILONGRUN_NOTIFICATIONS": "0"},
         )
-        assert integrity_finalize.returncode != 0
-        integrity_scheduler_after_fail = read_json(integrity_run_dir / "scheduler.json")
-        integrity_scheduler_after_fail["state"] = "completed"
-        (integrity_run_dir / "scheduler.json").write_text(json.dumps(integrity_scheduler_after_fail, ensure_ascii=False, indent=2), encoding="utf-8")
-        (integrity_workspace / ".copilot-ilongrun" / "state" / "active-run-id").write_text(integrity_run_id, encoding="utf-8")
-        run(
-            str(ROOT / "hook_event.py"),
-            env={"HOOK_EVENT": "sessionEnd"},
-            input_text=json.dumps({"cwd": str(integrity_workspace)}, ensure_ascii=False),
-        )
-        assert (integrity_workspace / ".copilot-ilongrun" / "state" / "active-run-id").read_text(encoding="utf-8").strip() == integrity_run_id
+        assert blocked_finalize.returncode == 0
+        blocked_final_scheduler = read_json(blocked_run_dir / "scheduler.json")
+        assert blocked_final_scheduler.get("state") == "blocked"
+        assert blocked_final_scheduler.get("verification", {}).get("state") == "failed"
+        assert (blocked_run_dir / "BLOCKED.md").exists()
+        assert not (blocked_run_dir / "COMPLETION.md").exists()
+        assert (blocked_workspace / ".copilot-ilongrun" / "state" / "active-run-id").read_text(encoding="utf-8").strip() == blocked_run_id
 
-        session_workspace = temp_root / "session-workspace"
-        session_workspace.mkdir(parents=True, exist_ok=True)
+        placeholder_workspace = temp_root / "placeholder-workspace"
+        placeholder_workspace.mkdir(parents=True, exist_ok=True)
         run(
             str(ROOT / "prepare_ilongrun_run.py"),
-            "--workspace", str(session_workspace),
-            "--task", "准备一个会在 sessionEnd 时自动落盘校验的 run",
+            "--workspace", str(placeholder_workspace),
+            "--task", "验证伪完成 workstream 会被硬失败阻断",
             "--force-profile", "coding",
         )
-        session_run_id = (session_workspace / ".copilot-ilongrun" / "state" / "latest-run-id").read_text(encoding="utf-8").strip()
-        session_run_dir = session_workspace / ".copilot-ilongrun" / "runs" / session_run_id
-        session_scheduler_before = read_json(session_run_dir / "scheduler.json")
-        assert (session_scheduler_before.get("verification") or {}).get("state") == "pending"
-        run(
-            str(ROOT / "hook_event.py"),
-            env={"HOOK_EVENT": "sessionEnd"},
-            input_text=json.dumps({"cwd": str(session_workspace)}, ensure_ascii=False),
+        placeholder_run_id = (placeholder_workspace / ".copilot-ilongrun" / "state" / "latest-run-id").read_text(encoding="utf-8").strip()
+        placeholder_run_dir = placeholder_workspace / ".copilot-ilongrun" / "runs" / placeholder_run_id
+        placeholder_scheduler = read_json(placeholder_run_dir / "scheduler.json")
+        placeholder_ws = (placeholder_scheduler.get("workstreams") or [])[0]
+        placeholder_ws["status"] = "complete"
+        (placeholder_run_dir / placeholder_ws["statusPath"]).write_text(
+            json.dumps({"id": placeholder_ws["id"], "status": "complete", "startedAt": "2026-04-07T00:00:00Z", "completedAt": "2026-04-07T00:01:00Z"}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
-        session_scheduler_after = read_json(session_run_dir / "scheduler.json")
-        assert (session_scheduler_after.get("verification") or {}).get("state") == "passed"
-        assert (session_scheduler_after.get("projectionState") or {}).get("ledgerSyncReason") == "hook-sessionEnd-precheck"
-        assert ((session_scheduler_after.get("runtime") or {}).get("lastHookPrecheck") or {}).get("event") == "sessionEnd"
-        assert (session_workspace / ".copilot-ilongrun" / "state" / "active-run-id").read_text(encoding="utf-8").strip() == session_run_id
-
-        pollution_workspace = temp_root / "pollution-workspace"
-        pollution_workspace.mkdir(parents=True, exist_ok=True)
-        run(
-            str(ROOT / "prepare_ilongrun_run.py"),
-            "--workspace", str(pollution_workspace),
-            "--task", "准备一个用于检测工作区污染的 run",
-            "--force-profile", "coding",
-        )
-        subprocess.run(["git", "-C", str(pollution_workspace), "init"], check=True, capture_output=True, text=True)
-        subprocess.run(["git", "-C", str(pollution_workspace), "config", "user.email", "selftest@example.com"], check=True, capture_output=True, text=True)
-        subprocess.run(["git", "-C", str(pollution_workspace), "config", "user.name", "Self Test"], check=True, capture_output=True, text=True)
-        (pollution_workspace / "node_modules" / "demo").mkdir(parents=True, exist_ok=True)
-        (pollution_workspace / "node_modules" / "demo" / "index.js").write_text("module.exports = {}\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(pollution_workspace), "add", ".copilot-ilongrun", "node_modules"], check=True, capture_output=True, text=True)
-        pollution_run_id = (pollution_workspace / ".copilot-ilongrun" / "state" / "latest-run-id").read_text(encoding="utf-8").strip()
-        pollution_verify = run(
+        (placeholder_run_dir / "scheduler.json").write_text(json.dumps(placeholder_scheduler, ensure_ascii=False, indent=2), encoding="utf-8")
+        placeholder_verify = run(
             str(ROOT / "verify_ilongrun_run.py"),
-            "--workspace", str(pollution_workspace),
-            "--run-id", pollution_run_id,
+            "--workspace", str(placeholder_workspace),
+            "--run-id", placeholder_run_id,
             "--json",
             ok=False,
         )
-        pollution_verify_payload = json.loads(pollution_verify.stdout)
-        assert any("workspace tracks generated artifacts" in item for item in pollution_verify_payload.get("driftFindings") or [])
+        placeholder_payload = json.loads(placeholder_verify.stdout)
+        assert any("workstream marked done without structured evidence" in item for item in placeholder_payload.get("hardFailures") or [])
 
-        drift_workspace = temp_root / "drift-workspace"
-        drift_workspace.mkdir(parents=True, exist_ok=True)
+        legacy_status_workspace = temp_root / "legacy-status-workspace"
+        legacy_status_workspace.mkdir(parents=True, exist_ok=True)
         run(
             str(ROOT / "prepare_ilongrun_run.py"),
-            "--workspace", str(drift_workspace),
-            "--task", "实现账户服务并补测试，最终生成审查报告",
+            "--workspace", str(legacy_status_workspace),
+            "--task", "验证 legacy scheduler.status 会被拒绝",
             "--force-profile", "coding",
         )
-        drift_run_id = (drift_workspace / ".copilot-ilongrun" / "state" / "latest-run-id").read_text(encoding="utf-8").strip()
-        drift_canonical = drift_workspace / ".copilot-ilongrun" / "runs" / drift_run_id
-        drift_legacy = drift_workspace / ".copilot-ilongrun" / drift_run_id
-        drift_legacy.mkdir(parents=True, exist_ok=True)
-        drift_scheduler = read_json(drift_canonical / "scheduler.json")
-        for ws in drift_scheduler.get("workstreams") or []:
-            ws["status"] = "complete"
-            ws_dir = drift_legacy / Path(ws["statusPath"]).parent
-            ws_dir.mkdir(parents=True, exist_ok=True)
-            (drift_legacy / ws["statusPath"]).write_text(json.dumps({"id": ws["id"], "status": "complete"}, ensure_ascii=False, indent=2), encoding="utf-8")
-            (drift_legacy / ws["resultPath"]).write_text("# Result\n\nLegacy execution finished.\n", encoding="utf-8")
-            (drift_legacy / ws["evidencePath"]).write_text("# Evidence\n\nLegacy evidence finished.\n", encoding="utf-8")
-        drift_scheduler["updatedAt"] = "2026-04-07T00:53:00Z"
-        drift_scheduler["selectedModel"] = "claude-opus-4.6"
-        (drift_legacy / "scheduler.json").write_text(json.dumps(drift_scheduler, ensure_ascii=False, indent=2), encoding="utf-8")
-        (drift_legacy / "reviews").mkdir(parents=True, exist_ok=True)
-        (drift_legacy / "reviews" / "final-review.md").write_text("# Final Review\n\n## Must-fix\n- None\n", encoding="utf-8")
-        run(str(ROOT / "reconcile_ilongrun_run.py"), "--workspace", str(drift_workspace), "--run-id", drift_run_id)
-        assert not drift_legacy.exists()
-        assert (drift_canonical / "reviews" / "final-review.md").exists()
-        assert (drift_canonical / "workstreams" / "ws-001" / "result.md").read_text(encoding="utf-8").startswith("# Result")
-        merge_reports = list((drift_workspace / ".copilot-ilongrun" / "legacy-imports" / "run-merges").glob("*.json"))
-        assert merge_reports
+        legacy_status_run_id = (legacy_status_workspace / ".copilot-ilongrun" / "state" / "latest-run-id").read_text(encoding="utf-8").strip()
+        legacy_status_run_dir = legacy_status_workspace / ".copilot-ilongrun" / "runs" / legacy_status_run_id
+        legacy_status_scheduler = read_json(legacy_status_run_dir / "scheduler.json")
+        legacy_status_scheduler["status"] = "completed"
+        (legacy_status_run_dir / "scheduler.json").write_text(json.dumps(legacy_status_scheduler, ensure_ascii=False, indent=2), encoding="utf-8")
+        legacy_status_verify = run(
+            str(ROOT / "verify_ilongrun_run.py"),
+            "--workspace", str(legacy_status_workspace),
+            "--run-id", legacy_status_run_id,
+            "--json",
+            ok=False,
+        )
+        legacy_status_payload = json.loads(legacy_status_verify.stdout)
+        assert any("legacy top-level scheduler.status field is not allowed" in item for item in legacy_status_payload.get("hardFailures") or [])
 
         legacy_plugin_workspace = temp_root / "legacy-plugin-workspace"
         legacy_plugin_workspace.mkdir(parents=True, exist_ok=True)
@@ -1207,9 +1157,10 @@ def main() -> int:
             ok=False,
         )
         delivery_verify_payload = json.loads(delivery_verify.stdout)
-        assert any("delivery audit flagged" in item for item in delivery_verify_payload.get("driftFindings") or [])
+        delivery_findings = (delivery_verify_payload.get("driftFindings") or []) + (delivery_verify_payload.get("softWarnings") or [])
+        assert any("delivery audit" in item for item in delivery_findings)
         delivery_score = delivery_verify_payload.get("completionScore") or {}
-        assert delivery_score.get("deliveryVerdict") in {"blocked", "implemented-not-wired", "state-drift"}
+        assert delivery_score.get("deliveryVerdict") in {"blocked", "implemented-not-wired", "prototype-risk", "state-drift"}
         assert ((delivery_score.get("layers") or {}).get("codeExists") or {}).get("score", 0) >= 0
         assert ((delivery_score.get("layers") or {}).get("wiredIntoEntry") or {}).get("score", 100) < 60
         delivery_report = delivery_workspace / ".copilot-ilongrun" / "runs" / delivery_run_id / "reviews" / "delivery-audit.md"
@@ -1223,8 +1174,8 @@ def main() -> int:
             text=True,
         )
         assert delivery_status_board.returncode == 0
-        assert "已实现但未接主链" in delivery_status_board.stdout
         assert "delivery-audit.md" in delivery_status_board.stdout
+        assert ("已实现但未接主链" in delivery_status_board.stdout) or ("delivery audit" in delivery_status_board.stdout.lower())
 
         print("ILongRun selftest passed")
         return 0

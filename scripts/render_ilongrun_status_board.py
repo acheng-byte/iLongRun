@@ -14,12 +14,18 @@ from _ilongrun_lib import (  # noqa: E402
     ACTIVE_WORKSTREAM_STATUSES,
     COMPLETE_WORKSTREAM_STATUSES,
     active_run_file,
+    blocked_path,
     completion_path,
     compute_completion_score,
     delivery_audit_path,
     ensure_scheduler_defaults,
     final_review_path,
+    failed_path,
     adjudication_path,
+    is_run_blocked_state,
+    is_run_complete_state,
+    is_run_failed_state,
+    is_run_terminal_state,
     journal_path,
     load_model_config,
     projection_log_path,
@@ -94,6 +100,7 @@ VERDICT_LABELS = {
     "implemented-not-wired": "已实现但未接主链",
     "implemented-not-validated": "已接线但验证不足",
     "blocked": "当前被阻断",
+    "state-drift": "账本状态漂移",
 }
 PHASE_LABELS = {
     "phase-strategy": "策略制定",
@@ -195,6 +202,8 @@ def compute_snapshot(sched: dict[str, Any], target) -> dict[str, Any]:
     review_exists = final_review_path(target).exists()
     adjudication_exists = adjudication_path(target).exists()
     completion_exists = completion_path(target).exists()
+    blocked_exists = blocked_path(target).exists()
+    failed_exists = failed_path(target).exists()
     active_pointer = read_text(active_run_file(target.base), "").strip()
     verification = sched.get("verification") or {}
     completion_score = verification.get("completionScore") or {}
@@ -228,10 +237,20 @@ def compute_snapshot(sched: dict[str, Any], target) -> dict[str, Any]:
         risks.append(f"漂移：{item}")
     for item in verification.get("softWarnings") or []:
         risks.append(f"警告：{item}")
-    if active_pointer and active_pointer == target.run_id and str(sched.get("state") or "").lower() in {"complete", "completed", "blocked"}:
-        risks.append("active-run-id 仍指向当前已完成/阻塞 run")
-    if str(sched.get("state") or "").lower() in {"complete", "completed"} and not completion_exists:
+    if active_pointer and active_pointer == target.run_id and is_run_complete_state(sched.get("state")):
+        risks.append("active-run-id 仍指向当前已完成 run")
+    if is_run_complete_state(sched.get("state")) and not completion_exists:
         risks.append("scheduler 已完成但 COMPLETION.md 缺失")
+    if is_run_blocked_state(sched.get("state")) and not blocked_exists:
+        risks.append("scheduler 已阻断但 BLOCKED.md 缺失")
+    if is_run_failed_state(sched.get("state")) and not failed_exists:
+        risks.append("scheduler 已失败但 FAILED.md 缺失")
+    if is_run_blocked_state(sched.get("state")) and completion_exists:
+        risks.append("blocked run 错误写入了 COMPLETION.md")
+    if is_run_failed_state(sched.get("state")) and completion_exists:
+        risks.append("failed run 错误写入了 COMPLETION.md")
+    if is_run_complete_state(sched.get("state")) and (blocked_exists or failed_exists):
+        risks.append("completed run 不应同时包含 BLOCKED.md / FAILED.md")
     if methodology:
         workspace = methodology.get("workspaceIsolation") or {}
         claim = methodology.get("claimVerification") or {}
@@ -275,8 +294,12 @@ def compute_snapshot(sched: dict[str, Any], target) -> dict[str, Any]:
     if not completion_score:
         next_steps.append("先执行一次 verify/finalize，生成最新 completion score。")
     if not next_steps:
-        if str(sched.get("state") or "").lower() in {"complete", "completed"} and not risks:
+        if is_run_complete_state(sched.get("state")) and not risks:
             next_steps.append("当前 run 已稳定完成，可归档或进入下一轮任务。")
+        elif is_run_blocked_state(sched.get("state")):
+            next_steps.append("先查看 `BLOCKED.md`，按阻断摘要决定是否修复后重跑。")
+        elif is_run_failed_state(sched.get("state")):
+            next_steps.append("先查看 `FAILED.md`，定位失败原因后再决定是否恢复。")
         else:
             next_steps.append("继续通过 `ilongrun-resume <run-id>` 收敛剩余问题。")
 
@@ -330,6 +353,8 @@ def compute_snapshot(sched: dict[str, Any], target) -> dict[str, Any]:
         "reviewExists": review_exists,
         "adjudicationExists": adjudication_exists,
         "completionExists": completion_exists,
+        "blockedExists": blocked_exists,
+        "failedExists": failed_exists,
         "activePointer": active_pointer,
         "deliveryAuditExists": delivery_audit_exists,
         "deliveryAuditPath": str(delivery_audit_file),
@@ -351,7 +376,7 @@ def final_verdict(sched: dict[str, Any], snapshot: dict[str, Any]) -> str:
     verification = sched.get("verification") or {}
     if verification.get("hardFailures") or state in {"blocked", "failed"}:
         return tone("err", "已阻塞")
-    if state in {"complete", "completed"} and not snapshot.get("risks"):
+    if state in {"completed"} and not snapshot.get("risks"):
         return tone("ok", "已完成")
     if snapshot.get("completionScore"):
         verdict = zh(VERDICT_LABELS, (snapshot.get("completionScore") or {}).get("deliveryVerdict"), fallback="可继续")
@@ -491,7 +516,9 @@ def main() -> int:
             review_gate = "已生成"
         print(detail_line("代码审查", tone_status(reviews.get("status"))))
         print(detail_line("最终终审", tone("warn" if "返工" in review_gate or "待" in review_gate else "ok", review_gate)))
-        print(detail_line("裁决", tone("ok" if snapshot.get("adjudicationExists") else "warn", "已写入" if snapshot.get("adjudicationExists") else "未写入")))
+        adjudication_label = str(reviews.get("adjudicationDecision") or "pending")
+        adjudication_tone = "ok" if adjudication_label == "proceed-to-finalize" else ("err" if adjudication_label == "return-for-fix" else "warn")
+        print(detail_line("裁决", tone(adjudication_tone, adjudication_label)))
         print(detail_line("必须修复", tone("err" if int(reviews.get("pendingMustFixCount") or 0) > 0 else "ok", f"{int(reviews.get('pendingMustFixCount') or 0)} 项")))
         gate_status = reviews.get("gateStatus") or {}
         for gate in review_matrix.get("gates") or []:
@@ -521,6 +548,14 @@ def main() -> int:
     print(detail_line("账本同步", tone("soft", f"{projection.get('ledgerSyncedAt') or '无'} / {projection.get('ledgerSyncActor') or 'unknown'} / {projection.get('ledgerSyncReason') or 'unknown'}")))
     print(detail_line("账本验证", tone("soft", f"{projection.get('lastLedgerVerificationState') or 'pending'} @ {projection.get('ledgerVerifiedAt') or '无'}")))
     print(detail_line("active 指针", tone("warn" if snapshot.get("activePointer") == target.run_id else "soft", snapshot.get("activePointer") or "none")))
+    terminal_docs = []
+    if snapshot.get("completionExists"):
+        terminal_docs.append("COMPLETION.md")
+    if snapshot.get("blockedExists"):
+        terminal_docs.append("BLOCKED.md")
+    if snapshot.get("failedExists"):
+        terminal_docs.append("FAILED.md")
+    print(detail_line("终态摘要", tone("soft", ", ".join(terminal_docs) if terminal_docs else "无")))
     if snapshot.get("recentLedgerEvent"):
         event = snapshot["recentLedgerEvent"]
         payload = event.get("payload") or {}

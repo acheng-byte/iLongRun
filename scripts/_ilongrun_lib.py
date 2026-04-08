@@ -60,9 +60,15 @@ REVIEW_RELATIVE_PATH = "reviews/final-review.md"
 ADJUDICATION_RELATIVE_PATH = "reviews/adjudication.md"
 DELIVERY_AUDIT_RELATIVE_PATH = "reviews/delivery-audit.md"
 COMPLETION_RELATIVE_PATH = "COMPLETION.md"
+BLOCKED_RELATIVE_PATH = "BLOCKED.md"
+FAILED_RELATIVE_PATH = "FAILED.md"
 COMPLETE_WORKSTREAM_STATUSES = {"complete", "completed", "verified", "done", "success", "succeeded", "pass", "passed", "finalized"}
-ACTIVE_WORKSTREAM_STATUSES = {"running", "pending", "blocked", "in-progress", "active"}
-COMPLETE_RUN_STATES = {"complete", "completed", "finalized"}
+ACTIVE_WORKSTREAM_STATUSES = {"running", "pending", "in-progress", "active"}
+BLOCKED_WORKSTREAM_STATUSES = {"blocked", "failed"}
+COMPLETE_RUN_STATES = {"completed"}
+BLOCKED_RUN_STATES = {"blocked"}
+FAILED_RUN_STATES = {"failed"}
+RUN_STATE_VALUES = COMPLETE_RUN_STATES | BLOCKED_RUN_STATES | FAILED_RUN_STATES | {"running"}
 NON_TASK_LIST_PHASE_TOKENS = {"strategy", "verify", "review", "audit", "finalize"}
 TRACKED_GENERATED_ROOTS = (".copilot-ilongrun", "node_modules", "dist", "build", ".next", "coverage")
 PLACEHOLDER_TEXT_MARKERS = (
@@ -775,15 +781,32 @@ def clear_active_run(base: Path, run_id: str | None = None) -> bool:
 
 def normalize_run_state(value: str | None) -> str:
     state = str(value or "").strip().lower()
-    if state in COMPLETE_RUN_STATES:
-        return "complete"
-    if state in {"failed", "error"}:
-        return "blocked"
-    return state or "running"
+    alias_map = {
+        "complete": "completed",
+        "completed": "completed",
+        "finalized": "completed",
+        "blocked": "blocked",
+        "failed": "failed",
+        "error": "failed",
+        "running": "running",
+    }
+    return alias_map.get(state, "running")
 
 
 def is_run_complete_state(value: str | None) -> bool:
-    return normalize_run_state(value) == "complete"
+    return normalize_run_state(value) == "completed"
+
+
+def is_run_blocked_state(value: str | None) -> bool:
+    return normalize_run_state(value) == "blocked"
+
+
+def is_run_failed_state(value: str | None) -> bool:
+    return normalize_run_state(value) == "failed"
+
+
+def is_run_terminal_state(value: str | None) -> bool:
+    return normalize_run_state(value) in {"completed", "blocked", "failed"}
 
 
 def phase_supports_task_list(phase: dict[str, Any] | str | None) -> bool:
@@ -830,6 +853,25 @@ def completion_path(target: RunTarget) -> Path:
     return target.run_dir / COMPLETION_RELATIVE_PATH
 
 
+def blocked_path(target: RunTarget) -> Path:
+    return target.run_dir / BLOCKED_RELATIVE_PATH
+
+
+def failed_path(target: RunTarget) -> Path:
+    return target.run_dir / FAILED_RELATIVE_PATH
+
+
+def terminal_report_path(target: RunTarget, state: str | None) -> Path | None:
+    normalized = normalize_run_state(state)
+    if normalized == "completed":
+        return completion_path(target)
+    if normalized == "blocked":
+        return blocked_path(target)
+    if normalized == "failed":
+        return failed_path(target)
+    return None
+
+
 def reviews_dir(target: RunTarget) -> Path:
     return target.run_dir / "reviews"
 
@@ -844,6 +886,14 @@ def adjudication_path(target: RunTarget) -> Path:
 
 def delivery_audit_path(target: RunTarget) -> Path:
     return target.run_dir / DELIVERY_AUDIT_RELATIVE_PATH
+
+
+def clear_terminal_reports(target: RunTarget, keep: str | None = None) -> None:
+    keep_path = terminal_report_path(target, keep)
+    for path in (completion_path(target), blocked_path(target), failed_path(target)):
+        if keep_path is not None and path == keep_path:
+            continue
+        path.unlink(missing_ok=True)
 
 
 def task_list_path(target: RunTarget, index: int) -> Path:
@@ -1096,7 +1146,7 @@ def scheduler_signal_score(scheduler: dict[str, Any]) -> tuple[int, str]:
     completed = len([ws for ws in workstreams if isinstance(ws, dict) and (ws.get("status") or "").lower() in COMPLETE_WORKSTREAM_STATUSES])
     reviews = scheduler.get("reviews") or {}
     deliverables = len([item for item in scheduler.get("deliverables") or [] if item])
-    state_bonus = {"complete": 40, "blocked": 20, "running": 10}.get((scheduler.get("state") or "").lower(), 0)
+    state_bonus = {"completed": 40, "blocked": 20, "failed": 20, "running": 10}.get(normalize_run_state(scheduler.get("state")), 0)
     score = (
         completed * 10
         + deliverables * 3
@@ -2000,7 +2050,8 @@ def normalize_workstream_records(payload: dict[str, Any]) -> None:
 def ensure_scheduler_defaults(scheduler: dict[str, Any] | None) -> dict[str, Any]:
     payload = copy.deepcopy(scheduler or {})
     payload.setdefault("runId", "")
-    payload["state"] = normalize_run_state(payload.get("state") or payload.get("status") or "running")
+    payload.pop("status", None)
+    payload["state"] = normalize_run_state(payload.get("state") or "running")
     payload.setdefault("phase", "strategy")
     payload.setdefault("summary", "ILongRun mission initialized")
     payload.setdefault("profile", "office")
@@ -2075,11 +2126,13 @@ def ensure_scheduler_defaults(scheduler: dict[str, Any] | None) -> dict[str, Any
     reviews.setdefault("deliveryAuditPath", DELIVERY_AUDIT_RELATIVE_PATH)
     reviews.setdefault("auditModel", payload.get("codingAuditModel") or default_model_config().get("codingAuditModel"))
     reviews.setdefault("status", "pending" if reviews.get("required") else "not-required")
+    reviews.setdefault("finalVerdict", "pending" if reviews.get("required") else "not-required")
     reviews.setdefault("pendingMustFixCount", 0)
     reviews.setdefault("mustFix", [])
     reviews.setdefault("shouldFix", [])
     reviews.setdefault("defer", [])
     reviews.setdefault("adjudicationStatus", "pending" if reviews.get("required") else "not-required")
+    reviews.setdefault("adjudicationDecision", "pending" if reviews.get("required") else "not-required")
     reviews.setdefault("gateStatus", {})
     payload["reviews"] = reviews
     verification = payload.get("verification") or {}
@@ -2310,6 +2363,64 @@ def workstream_requires_task_list(scheduler: dict[str, Any], workstream: dict[st
     return phase_supports_task_list(phase or str(workstream.get("phaseId") or ""))
 
 
+def should_autowrite_planning_artifacts(workstream: dict[str, Any]) -> bool:
+    return (
+        str(workstream.get("phaseId") or "") in {"phase-define", "phase-plan"}
+        and str(workstream.get("status") or "").lower() in COMPLETE_WORKSTREAM_STATUSES
+    )
+
+
+def build_autogenerated_result_markdown(scheduler: dict[str, Any], workstream: dict[str, Any]) -> str:
+    outputs = [str(item) for item in workstream.get("outputs") or [] if str(item).strip()]
+    deps = [str(item) for item in workstream.get("dependencies") or [] if str(item).strip()]
+    lines = [
+        "# Result",
+        "",
+        "## Summary",
+        f"- Workstream: `{workstream.get('id')}` / {workstream.get('name') or 'unnamed'}",
+        f"- Phase: `{workstream.get('phaseId') or 'unknown'}`",
+        f"- Status: `{workstream.get('status') or 'unknown'}`",
+        f"- Goal: {workstream.get('goal') or 'n/a'}",
+        f"- Owner: `{workstream.get('ownerRole') or 'unknown'}` / `{workstream.get('ownerModel') or 'unknown'}`",
+        "",
+        "## Planning Outputs",
+        *([f"- `{item}`" for item in outputs] or ["- None explicitly declared."]),
+        "",
+        "## Dependency Context",
+        *([f"- Depends on `{item}`" for item in deps] or ["- No upstream workstream dependencies."]),
+        "",
+        "## Note",
+        "- 该结果由账本投影自动生成，用于 define/plan workstream 的结构化留痕。",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def build_autogenerated_evidence_markdown(workstream: dict[str, Any]) -> str:
+    acceptance = [str(item.get("text") or "").strip() for item in workstream.get("acceptanceChecklist") or [] if str(item.get("text") or "").strip()]
+    verify_items = [str(item.get("text") or "").strip() for item in workstream.get("verifyChecklist") or [] if str(item.get("text") or "").strip()]
+    lines = [
+        "# Evidence",
+        "",
+        "## Ledger Evidence",
+        f"- Status path: `{workstream.get('statusPath')}`",
+        f"- Result path: `{workstream.get('resultPath')}`",
+        f"- Evidence path: `{workstream.get('evidencePath')}`",
+        f"- Spec ref: `{workstream.get('specRef') or 'n/a'}`",
+        "",
+        "## Acceptance Checklist",
+        *([f"- {item}" for item in acceptance] or ["- None."]),
+        "",
+        "## Verification Checklist",
+        *([f"- {item}" for item in verify_items] or ["- None."]),
+        "",
+        "## Note",
+        "- 该证据由系统在 define/plan workstream 完成时自动写入，避免占位模板被误判为真实产物。",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def sync_workstream_status_files(target: RunTarget, scheduler: dict[str, Any]) -> None:
     for ws in scheduler.get("workstreams") or []:
         ws_dir = workstream_dir(target, ws["id"])
@@ -2364,9 +2475,17 @@ def sync_workstream_status_files(target: RunTarget, scheduler: dict[str, Any]) -
         write_text_atomic(workstream_brief_path(target, ws["id"]), brief)
         result_path = workstream_result_path(target, ws["id"])
         evidence_path = workstream_evidence_path(target, ws["id"])
-        if not result_path.exists() or not read_text(result_path, "").strip():
+        result_text = read_text(result_path, "")
+        evidence_text = read_text(evidence_path, "")
+        if should_autowrite_planning_artifacts(ws):
+            if not result_text.strip() or is_placeholder_work_product(result_path, result_text):
+                write_text_atomic(result_path, build_autogenerated_result_markdown(scheduler, ws))
+            if not evidence_text.strip() or is_placeholder_work_product(evidence_path, evidence_text):
+                write_text_atomic(evidence_path, build_autogenerated_evidence_markdown(ws))
+            continue
+        if not result_text.strip():
             write_text_atomic(result_path, f"# Result\n\nPending result for `{ws['id']}`.\n")
-        if not evidence_path.exists() or not read_text(evidence_path, "").strip():
+        if not evidence_text.strip():
             write_text_atomic(evidence_path, f"# Evidence\n\nPending evidence for `{ws['id']}`.\n")
 
 
@@ -2515,8 +2634,13 @@ def build_plan_markdown(target: RunTarget, scheduler: dict[str, Any]) -> str:
     drift_notes.extend(str(item) for item in verification.get("driftFindings") or [])
     if is_run_complete_state(scheduler.get("state")) and active_run == target.run_id:
         drift_notes.append("active-run-id 仍指向已完成 run")
-    if is_run_complete_state(scheduler.get("state")) and not completion_path(target).exists():
-        drift_notes.append("scheduler 已完成但 COMPLETION.md 缺失")
+    report_path = terminal_report_path(target, scheduler.get("state"))
+    if is_run_terminal_state(scheduler.get("state")) and report_path is not None and not report_path.exists():
+        drift_notes.append(f"scheduler 终态为 `{scheduler.get('state')}` 但 `{report_path.name}` 缺失")
+    if is_run_blocked_state(scheduler.get("state")) and completion_path(target).exists():
+        drift_notes.append("blocked run 不应写入 COMPLETION.md")
+    if is_run_failed_state(scheduler.get("state")) and completion_path(target).exists():
+        drift_notes.append("failed run 不应写入 COMPLETION.md")
     lines = [
         "# ILongRun Plan",
         "",
@@ -2532,7 +2656,7 @@ def build_plan_markdown(target: RunTarget, scheduler: dict[str, Any]) -> str:
         f"- Review gates: `{len(review_matrix.get('gates') or [])}`",
         "",
         "## Projection & Ledger Consistency",
-        "- Truth source: `scheduler.json`（top-level `state` 为完成态唯一真值；legacy `status` 仅兼容读取） + `workstreams/*/status.json`",
+        "- Truth source: `scheduler.json.state` + `workstreams/*/status.json`（不再兼容 legacy `status` 字段）",
         f"- Task-list projections: `{len(scheduler.get('taskLists') or [])}`",
         f"- plan/strategy/task-lists synced at: `{(scheduler.get('projectionState') or {}).get('taskListsSyncedAt')}`",
         f"- Ledger sync: `{(scheduler.get('projectionState') or {}).get('ledgerSyncedAt')}` / `{(scheduler.get('projectionState') or {}).get('ledgerSyncActor') or 'unknown'}` / `{(scheduler.get('projectionState') or {}).get('ledgerSyncReason') or 'unknown'}`",
@@ -2816,7 +2940,11 @@ def sync_projections(target: RunTarget, scheduler: dict[str, Any]) -> None:
     for record in task_list_records_for_scheduler(scheduler):
         write_text_atomic(task_list_projection_path(target, str(record.get("path") or "")), build_task_list_markdown(target, scheduler, record))
     if scheduler.get("profile") == "coding":
-        write_text_atomic(adjudication_path(target), build_adjudication_markdown(target, scheduler))
+        review_file = final_review_path(target)
+        if review_file.exists() and review_file.stat().st_size > 0 and parse_final_review_verdict(read_text(review_file, "")) != "UNKNOWN":
+            write_text_atomic(adjudication_path(target), build_adjudication_markdown(target, scheduler))
+        else:
+            adjudication_path(target).unlink(missing_ok=True)
     sync_workstream_status_files(target, scheduler)
     projection = scheduler.get("projectionState") or {}
     ts = now_iso()
@@ -2839,7 +2967,12 @@ def projected_paths_for_scheduler(target: RunTarget, scheduler: dict[str, Any]) 
         for record in task_list_records_for_scheduler(scheduler)
         if str(record.get("path") or "").strip()
     )
-    if scheduler.get("profile") == "coding":
+    if (
+        scheduler.get("profile") == "coding"
+        and final_review_path(target).exists()
+        and final_review_path(target).stat().st_size > 0
+        and parse_final_review_verdict(read_text(final_review_path(target), "")) != "UNKNOWN"
+    ):
         paths.append(adjudication_path(target).relative_to(target.run_dir).as_posix())
     return sorted(dict.fromkeys(paths))
 
@@ -2960,6 +3093,24 @@ def parse_review_sections(text: str) -> dict[str, list[str]]:
     return sections
 
 
+def parse_final_review_verdict(text: str) -> str:
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        match = re.match(r"^(?:[-*]|\d+\.)\s+(PASS_WITH_CONDITIONS|PASS|FAIL)\s*$", line, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).upper()
+    return "UNKNOWN"
+
+
+def parse_adjudication_decision(text: str) -> str:
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        match = re.match(r"^-\s+Decision:\s+`([^`]+)`", line, flags=re.IGNORECASE)
+        if match:
+            return str(match.group(1) or "").strip().lower()
+    return "unknown"
+
+
 def runnable_fleet_waves(scheduler: dict[str, Any]) -> list[dict[str, Any]]:
     runnable: list[dict[str, Any]] = []
     for phase in scheduler.get("phases") or []:
@@ -3065,8 +3216,9 @@ def compute_completion_score(
         ("noHardFailures", not hard_failures),
         ("noDriftFindings", not drift_findings),
     ]
-    if is_run_complete_state(scheduler.get("state")):
-        runtime_checks.append(("completionFilePresent", file_is_nonempty(completion_path(target))))
+    report_path = terminal_report_path(target, scheduler.get("state"))
+    if is_run_terminal_state(scheduler.get("state")) and report_path is not None:
+        runtime_checks.append(("terminalReportPresent", file_is_nonempty(report_path)))
     if scheduler.get("profile") == "coding":
         runtime_checks.append(("finalReviewPresent", file_is_nonempty(final_review_path(target))))
         runtime_checks.append(("adjudicationPresent", file_is_nonempty(adjudication_path(target))))
@@ -3094,14 +3246,27 @@ def compute_completion_score(
     uncapped_overall = round(sum(overall_components) / len(overall_components))
     score_cap: int | None = None
     cap_reason: str | None = None
+    run_state = normalize_run_state(scheduler.get("state"))
     if hard_failures:
         score_cap = 49
         cap_reason = "hard-failure"
     elif drift_findings:
         score_cap = 69
         cap_reason = "state-drift"
+    if run_state == "blocked":
+        blocked_cap = 59
+        if score_cap is None or blocked_cap < score_cap:
+            score_cap = blocked_cap
+            cap_reason = "blocked"
+    elif run_state == "failed":
+        failed_cap = 39
+        if score_cap is None or failed_cap < score_cap:
+            score_cap = failed_cap
+            cap_reason = "failed"
     overall = min(uncapped_overall, score_cap) if score_cap is not None else uncapped_overall
-    if hard_failures:
+    if run_state in {"blocked", "failed"}:
+        delivery_verdict = "blocked"
+    elif hard_failures:
         delivery_verdict = "blocked"
     elif drift_findings:
         delivery_verdict = "state-drift"
@@ -3152,7 +3317,6 @@ def compute_completion_score(
 
 
 def reconcile_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None) -> dict[str, Any]:
-    merge_legacy_run_dir(target)
     sched = ensure_scheduler_defaults(copy.deepcopy(scheduler or read_json(scheduler_path(target), {})))
     sched["state"] = normalize_run_state(sched.get("state"))
     coding_protocol = load_coding_protocol() if sched.get("profile") == "coding" else {}
@@ -3237,6 +3401,8 @@ def reconcile_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = No
             phase["status"] = "complete" if phase["id"] == "phase-strategy" and sched.get("state") != "running" else phase.get("status", "pending")
         elif all(workstream_by_id(sched, ws_id) and str(workstream_by_id(sched, ws_id).get("status") or "").lower() in COMPLETE_WORKSTREAM_STATUSES for ws_id in phase_ws_ids):
             phase["status"] = "complete"
+        elif any(workstream_by_id(sched, ws_id) and str(workstream_by_id(sched, ws_id).get("status") or "").lower() in BLOCKED_WORKSTREAM_STATUSES for ws_id in phase_ws_ids):
+            phase["status"] = "blocked"
         elif any(workstream_by_id(sched, ws_id) and str(workstream_by_id(sched, ws_id).get("status") or "").lower() in ACTIVE_WORKSTREAM_STATUSES for ws_id in phase_ws_ids):
             phase["status"] = "running"
         else:
@@ -3247,6 +3413,8 @@ def reconcile_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = No
                 wave["status"] = "complete" if phase["status"] == "complete" else wave.get("status", "pending")
             elif all(workstream_by_id(sched, ws_id) and str(workstream_by_id(sched, ws_id).get("status") or "").lower() in COMPLETE_WORKSTREAM_STATUSES for ws_id in wave_ws_ids):
                 wave["status"] = "complete"
+            elif any(workstream_by_id(sched, ws_id) and str(workstream_by_id(sched, ws_id).get("status") or "").lower() in BLOCKED_WORKSTREAM_STATUSES for ws_id in wave_ws_ids):
+                wave["status"] = "blocked"
             elif any(workstream_by_id(sched, ws_id) and str(workstream_by_id(sched, ws_id).get("status") or "").lower() in ACTIVE_WORKSTREAM_STATUSES for ws_id in wave_ws_ids):
                 wave["status"] = "running"
             else:
@@ -3254,6 +3422,7 @@ def reconcile_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = No
 
     if sched.get("profile") == "coding":
         protocol = load_coding_protocol()
+        reviews = sched.setdefault("reviews", {})
         workspace_state = normalize_workspace_isolation(sched.get("workspaceIsolation"), protocol)
         build_streams = [ws for ws in sched.get("workstreams") or [] if str(ws.get("phaseId") or "") == "phase-build"]
         evidence_streams = [
@@ -3326,7 +3495,7 @@ def reconcile_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = No
                 review_gate_status[gate_id] = "running"
             else:
                 review_gate_status[gate_id] = "pending"
-        sched.setdefault("reviews", {})["gateStatus"] = review_gate_status
+        reviews["gateStatus"] = review_gate_status
 
         review_phase = phase_by_id(sched, "phase-review")
         audit_phase = phase_by_id(sched, "phase-audit")
@@ -3334,7 +3503,41 @@ def reconcile_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = No
         review_complete = bool(review_gate_status) and all(status == "complete" for status in review_gate_status.values())
         review_exists = final_review_path(target).exists() and final_review_path(target).stat().st_size > 0
         adjudication_exists = adjudication_path(target).exists() and adjudication_path(target).stat().st_size > 0
-        pending_must_fix = int((sched.get("reviews") or {}).get("pendingMustFixCount") or 0)
+        review_text = read_text(final_review_path(target), "") if review_exists else ""
+        adjudication_text = read_text(adjudication_path(target), "") if adjudication_exists else ""
+        final_verdict = parse_final_review_verdict(review_text) if review_exists else "PENDING"
+        adjudication_decision = parse_adjudication_decision(adjudication_text) if adjudication_exists else "pending"
+        if review_exists:
+            sections = parse_review_sections(review_text)
+            reviews["mustFix"] = sections["mustFix"]
+            reviews["shouldFix"] = sections["shouldFix"]
+            reviews["defer"] = sections["defer"]
+            reviews["pendingMustFixCount"] = len(sections["mustFix"])
+            reviews["finalVerdict"] = final_verdict
+            reviews["adjudicationStatus"] = "complete" if adjudication_exists else "pending"
+            reviews["adjudicationDecision"] = adjudication_decision
+            if final_verdict == "FAIL" or sections["mustFix"] or adjudication_decision == "return-for-fix":
+                reviews["status"] = "failed"
+            elif adjudication_exists and adjudication_decision == "proceed-to-finalize":
+                reviews["status"] = "passed"
+            else:
+                reviews["status"] = "waiting-adjudication"
+        else:
+            reviews["pendingMustFixCount"] = 0
+            reviews["mustFix"] = []
+            reviews["shouldFix"] = []
+            reviews["defer"] = []
+            reviews["finalVerdict"] = "pending"
+            reviews["adjudicationStatus"] = "pending" if reviews.get("required") else "not-required"
+            reviews["adjudicationDecision"] = "pending" if reviews.get("required") else "not-required"
+            reviews["status"] = "waiting-audit" if review_complete else "pending"
+
+        pending_must_fix = int(reviews.get("pendingMustFixCount") or 0)
+        blocked_due_audit = reviews.get("status") == "failed" or adjudication_decision == "return-for-fix"
+        finalize_ready = (
+            reviews.get("status") == "passed"
+            and adjudication_decision == "proceed-to-finalize"
+        )
 
         if review_phase:
             review_phase["status"] = (
@@ -3346,14 +3549,16 @@ def reconcile_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = No
                 wave["status"] = review_phase["status"]
 
         if audit_phase:
-            if pending_must_fix > 0:
-                audit_phase["status"] = "blocked"
-            elif review_complete and review_exists and adjudication_exists:
-                audit_phase["status"] = "complete"
-            elif review_complete and (review_exists or adjudication_exists):
-                audit_phase["status"] = "running"
-            elif review_complete:
+            if not review_complete:
                 audit_phase["status"] = "pending"
+            elif not review_exists:
+                audit_phase["status"] = "running"
+            elif blocked_due_audit:
+                audit_phase["status"] = "blocked"
+            elif finalize_ready:
+                audit_phase["status"] = "complete"
+            elif review_exists:
+                audit_phase["status"] = "running"
             else:
                 audit_phase["status"] = "pending"
             for wave in audit_phase.get("waves") or []:
@@ -3362,44 +3567,48 @@ def reconcile_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = No
         if finalize_phase:
             if is_run_complete_state(sched.get("state")) and completion_path(target).exists():
                 finalize_phase["status"] = "complete"
-            elif audit_phase and audit_phase.get("status") == "complete":
+            elif is_run_blocked_state(sched.get("state")) and blocked_path(target).exists():
+                finalize_phase["status"] = "blocked"
+            elif is_run_failed_state(sched.get("state")) and failed_path(target).exists():
+                finalize_phase["status"] = "blocked"
+            elif blocked_due_audit:
+                finalize_phase["status"] = "pending"
+            elif finalize_ready:
                 finalize_phase["status"] = "running" if claim_verification_is_complete(claim_verification) else "blocked"
             else:
                 finalize_phase["status"] = "pending"
             for wave in finalize_phase.get("waves") or []:
                 wave["status"] = finalize_phase["status"]
 
-    phase_candidates = [phase for phase in sched.get("phases") or [] if phase.get("status") != "complete"]
-    if phase_candidates:
+        current_state = normalize_run_state(sched.get("state"))
+        if blocked_due_audit:
+            sched["state"] = "blocked"
+        elif current_state == "failed":
+            sched["state"] = "failed"
+        elif current_state == "blocked" and blocked_path(target).exists():
+            sched["state"] = "blocked"
+        elif current_state == "completed" and completion_path(target).exists():
+            sched["state"] = "completed"
+        else:
+            sched["state"] = "running"
+
+    phase_candidates = [phase for phase in sched.get("phases") or [] if phase.get("status") not in {"complete"}]
+    if is_run_complete_state(sched.get("state")):
+        sched["phase"] = "phase-finalize"
+    elif is_run_blocked_state(sched.get("state")):
+        reviews = sched.get("reviews") or {}
+        if reviews.get("status") in {"failed", "waiting-audit", "waiting-adjudication"}:
+            sched["phase"] = "phase-audit"
+        elif phase_by_id(sched, "phase-finalize") and phase_by_id(sched, "phase-finalize").get("status") == "blocked":
+            sched["phase"] = "phase-finalize"
+        elif phase_candidates:
+            sched["phase"] = phase_candidates[0]["id"]
+        else:
+            sched["phase"] = "phase-audit"
+    elif phase_candidates:
         sched["phase"] = phase_candidates[0]["id"]
     elif sched.get("state") == "running":
         sched["phase"] = "phase-finalize"
-    elif is_run_complete_state(sched.get("state")):
-        sched["phase"] = "phase-finalize"
-
-    if sched.get("profile") == "coding":
-        review_path = final_review_path(target)
-        if review_path.exists() and review_path.stat().st_size > 0:
-            sections = parse_review_sections(read_text(review_path, ""))
-            sched.setdefault("reviews", {})["mustFix"] = sections["mustFix"]
-            sched.setdefault("reviews", {})["shouldFix"] = sections["shouldFix"]
-            sched.setdefault("reviews", {})["defer"] = sections["defer"]
-            sched["reviews"]["pendingMustFixCount"] = len(sections["mustFix"])
-            sched["reviews"]["status"] = "failed" if sections["mustFix"] else "passed"
-            adjudication_exists = adjudication_path(target).exists() and adjudication_path(target).stat().st_size > 0
-            sched["reviews"]["adjudicationStatus"] = "written" if adjudication_exists else "pending"
-            if sections["mustFix"] and normalize_run_state(sched.get("state")) in {"running", "blocked", "complete"}:
-                sched["state"] = "blocked"
-                sched["phase"] = "phase-audit"
-        else:
-            gate_status = (sched.get("reviews") or {}).get("gateStatus") or {}
-            review_complete = bool(gate_status) and all(status == "complete" for status in gate_status.values())
-            sched.setdefault("reviews", {})["status"] = "waiting-audit" if review_complete else "pending"
-            sched["reviews"]["pendingMustFixCount"] = 0
-            sched["reviews"]["mustFix"] = []
-            sched["reviews"]["shouldFix"] = []
-            sched["reviews"]["defer"] = []
-            sched["reviews"]["adjudicationStatus"] = "pending"
 
     sched["updatedAt"] = now_iso()
     return sched
@@ -3436,35 +3645,17 @@ def verify_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None,
     plan_phase = re.search(r"-\s+Active phase:\s+`([^`]+)`", plan_text)
     if plan_phase and str(plan_phase.group(1)).strip() != str(sched.get("phase") or "").strip():
         drift_findings.append(f"plan.md phase drift: {plan_phase.group(1)} != {sched.get('phase')}")
-    raw_state_value = raw_scheduler.get("state")
-    raw_status_value = raw_scheduler.get("status")
-    if raw_status_value is not None:
-        normalized_status = normalize_run_state(raw_status_value)
-        if raw_state_value is not None and normalized_status != normalize_run_state(raw_state_value):
-            drift_findings.append(
-                f"top-level scheduler status conflicts with state: status={raw_status_value} != state={raw_state_value}"
-            )
-        elif normalized_status != normalize_run_state(sched.get("state")):
-            drift_findings.append(
-                f"top-level scheduler status alias drift: status={raw_status_value} != state={sched.get('state')}"
-            )
+    raw_state = str(raw_scheduler.get("state") or "").strip().lower()
+    if raw_state not in RUN_STATE_VALUES:
+        hard_failures.append(f"invalid canonical scheduler.state for new runs: {raw_state or 'missing'}")
+    if "status" in raw_scheduler:
+        hard_failures.append("legacy top-level scheduler.status field is not allowed in new runs")
     workstreams = sched.get("workstreams") or []
-    if sched.get("profile") == "coding":
-        raw_protocol_version = str(((raw_scheduler.get("codingProtocol") or {}).get("version") or "")).strip()
-        if protocol_version_is_legacy(raw_protocol_version, current=str((load_coding_protocol().get("version") or "0.7.0"))):
-            soft_warnings.append(f"legacy coding protocol detected: {raw_protocol_version or 'unknown'}; 0.7.0 gates are running in best-effort migration mode")
-        if not isinstance(raw_scheduler.get("workspaceIsolation"), dict):
-            soft_warnings.append("scheduler workspaceIsolation was inferred for 0.7.0 compatibility")
-        if not isinstance(raw_scheduler.get("phaseGuards"), dict):
-            soft_warnings.append("scheduler phaseGuards were inferred for 0.7.0 compatibility")
-        if not isinstance(raw_scheduler.get("claimVerification"), dict):
-            soft_warnings.append("scheduler claimVerification was inferred for 0.7.0 compatibility")
     if not workstreams:
         hard_failures.append("scheduler has no workstreams")
     if not (sched.get("taskLists") or []):
-        drift_findings.append("scheduler is missing explicit taskLists mapping")
-    elif not (isinstance(raw_scheduler.get("taskLists"), list) and raw_scheduler.get("taskLists")):
-        drift_findings.append("scheduler taskLists[] mapping was inferred, not explicitly persisted")
+        hard_failures.append("scheduler is missing explicit taskLists mapping")
+    state = normalize_run_state(sched.get("state"))
     for ws in workstreams:
         task_list_rel = str(ws.get("taskListPath") or "").strip()
         requires_task_list = workstream_requires_task_list(sched, ws)
@@ -3493,7 +3684,7 @@ def verify_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None,
             hard_failures.append(f"finalize blocked: required workstream not complete: {ws['id']}")
         projection = workstream_projection_state(target, ws)
         if projection["drift"]:
-            drift_findings.append(f"workstream claims complete without full evidence: {ws['id']}")
+            hard_failures.append(f"workstream marked done without structured evidence: {ws['id']}")
         if sched.get("profile") == "coding":
             microcycle = normalize_microcycle_state(ws.get("microcycleState"), str(sched.get("profile") or "office"), str(ws.get("phaseId") or ""), load_coding_protocol())
             review_sequence = normalize_review_sequence(ws.get("reviewSequence"), str(sched.get("profile") or "office"), str(ws.get("phaseId") or ""))
@@ -3577,6 +3768,17 @@ def verify_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None,
         tracked_generated = [str(item) for item in workspace_isolation.get("trackedGeneratedPaths") or [] if str(item).strip()]
         phase_guards = normalize_phase_guards(sched.get("phaseGuards"), load_coding_protocol())
         claim_verification = normalize_claim_verification(sched.get("claimVerification"), load_coding_protocol())
+        review_exists = final_review_path(target).exists() and final_review_path(target).stat().st_size > 0
+        adjudication_exists = adjudication_path(target).exists() and adjudication_path(target).stat().st_size > 0
+        review_text = read_text(final_review_path(target), "") if review_exists else ""
+        adjudication_text = read_text(adjudication_path(target), "") if adjudication_exists else ""
+        final_verdict = parse_final_review_verdict(review_text) if review_exists else "PENDING"
+        adjudication_decision = parse_adjudication_decision(adjudication_text) if adjudication_exists else "pending"
+        reviews = sched.get("reviews") or {}
+        audit_model = reviews.get("auditModel") or sched.get("codingAuditModel") or "gpt-5.4"
+        gate_status = reviews.get("gateStatus") or {}
+        review_phase = phase_by_id(sched, "phase-review")
+        review_complete = bool(gate_status) and all(status == "complete" for status in gate_status.values())
         if workspace_isolation.get("enabled") and not workspace_isolation.get("assessed"):
             hard_failures.append("workspace isolation assessment missing")
         elif workspace_isolation.get("enabled") and str(workspace_isolation.get("status") or "") not in {"ready", "skipped", "not-required"}:
@@ -3590,27 +3792,39 @@ def verify_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None,
         if finalize_candidate and not claim_verification_is_complete(claim_verification):
             missing = ", ".join(claim_verification.get("missingWorkstreams") or []) or "unknown"
             hard_failures.append(f"finalize blocked: claimVerification incomplete ({missing})")
+
         delivery_audit = scan_workspace_delivery_gaps(target.workspace)
         write_text_atomic(delivery_audit_path(target), render_delivery_audit_markdown(delivery_audit))
         high_confidence = [item for item in delivery_audit.get("findings") or [] if item.get("severity") == "high"]
         medium_confidence = [item for item in delivery_audit.get("findings") or [] if item.get("severity") == "medium"]
-        if high_confidence:
+        strict_delivery_audit = finalize_candidate or review_complete or is_run_terminal_state(state)
+        if strict_delivery_audit and high_confidence:
             drift_findings.append(
                 f"delivery audit flagged {len(high_confidence)} high-confidence fake-completion risks (see {(sched.get('reviews') or {}).get('deliveryAuditPath') or DELIVERY_AUDIT_RELATIVE_PATH})"
             )
             for item in high_confidence[:3]:
                 drift_findings.append(f"delivery audit: {item.get('summary')}")
-        elif medium_confidence:
+        elif strict_delivery_audit and medium_confidence:
             soft_warnings.append(
                 f"delivery audit flagged {len(medium_confidence)} medium-confidence risks (see {(sched.get('reviews') or {}).get('deliveryAuditPath') or DELIVERY_AUDIT_RELATIVE_PATH})"
             )
-        review_exists = final_review_path(target).exists() and final_review_path(target).stat().st_size > 0
-        adjudication_exists = adjudication_path(target).exists() and adjudication_path(target).stat().st_size > 0
-        audit_model = (sched.get("reviews") or {}).get("auditModel") or sched.get("codingAuditModel") or "gpt-5.4"
-        gate_status = (sched.get("reviews") or {}).get("gateStatus") or {}
-        review_phase = phase_by_id(sched, "phase-review")
-        review_complete = bool(gate_status) and all(status == "complete" for status in gate_status.values())
-        audit_required_now = finalize_candidate or review_complete or is_run_complete_state(sched.get("state"))
+        elif not strict_delivery_audit and (high_confidence or medium_confidence):
+            soft_warnings.append(
+                f"delivery audit found {len(high_confidence) + len(medium_confidence)} runtime gaps; strict wiring verdict deferred until final audit"
+            )
+
+        if review_exists and final_verdict == "UNKNOWN":
+            hard_failures.append("reviews/final-review.md verdict is invalid or missing")
+        if adjudication_exists and adjudication_decision not in {"proceed-to-finalize", "return-for-fix"}:
+            hard_failures.append("reviews/adjudication.md decision is invalid or missing")
+        if adjudication_exists and not review_exists:
+            hard_failures.append("reviews/adjudication.md exists before reviews/final-review.md")
+        if review_exists and final_verdict == "FAIL" and adjudication_exists and adjudication_decision != "return-for-fix":
+            hard_failures.append("audit verdict FAIL must pair with adjudication decision return-for-fix")
+        if review_exists and final_verdict in {"PASS", "PASS_WITH_CONDITIONS"} and adjudication_exists and adjudication_decision != "proceed-to-finalize":
+            hard_failures.append("audit verdict PASS must pair with adjudication decision proceed-to-finalize")
+
+        audit_required_now = finalize_candidate or review_complete or review_exists or adjudication_exists or is_run_complete_state(state)
         for gate_id, status in gate_status.items():
             if finalize_candidate and status != "complete":
                 hard_failures.append(f"phase-review gate incomplete: {gate_id}")
@@ -3623,12 +3837,43 @@ def verify_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None,
         pending = int((sched.get("reviews") or {}).get("pendingMustFixCount") or 0)
         if audit_required_now and pending > 0:
             hard_failures.append(f"final audit ({audit_model}) still has unresolved must-fix items: {pending}")
-    if is_run_complete_state(sched.get("state")) and sched.get("activeWorkstreams"):
-        drift_findings.append("scheduler is finalized but activeWorkstreams is not empty")
-    if is_run_complete_state(sched.get("state")) and read_text(active_run_file(target.base), "").strip() == target.run_id:
+        if str(reviews.get("status") or "").lower() == "failed" and str((sched.get("verification") or {}).get("state") or "").lower() == "passed":
+            hard_failures.append("reviews.status=failed cannot coexist with verification.state=passed")
+        if claim_verification.get("required") and not claim_verification_is_complete(claim_verification) and is_run_complete_state(state):
+            hard_failures.append("completed run cannot keep claimVerification pending")
+        if is_run_complete_state(state):
+            if final_verdict not in {"PASS", "PASS_WITH_CONDITIONS"}:
+                hard_failures.append("completed run requires final review PASS or PASS_WITH_CONDITIONS")
+            if adjudication_decision != "proceed-to-finalize":
+                hard_failures.append("completed run requires adjudication decision proceed-to-finalize")
+            if str(reviews.get("status") or "").lower() != "passed":
+                hard_failures.append("completed run requires reviews.status=passed")
+        if is_run_blocked_state(state) and adjudication_decision == "proceed-to-finalize":
+            hard_failures.append("blocked run cannot keep adjudication decision proceed-to-finalize")
+        if is_run_failed_state(state) and str((sched.get("verification") or {}).get("state") or "").lower() == "passed":
+            hard_failures.append("failed run cannot keep verification.state=passed")
+
+    completion_exists = completion_path(target).exists()
+    blocked_exists = blocked_path(target).exists()
+    failed_exists = failed_path(target).exists()
+    active_pointer = read_text(active_run_file(target.base), "").strip()
+    if is_run_terminal_state(state) and sched.get("activeWorkstreams"):
+        hard_failures.append("terminal run must not keep activeWorkstreams")
+    if is_run_complete_state(state) and active_pointer == target.run_id:
         drift_findings.append("active-run-id still points at a completed run")
-    if is_run_complete_state(sched.get("state")) and not completion_path(target).exists() and not finalize_candidate:
-        drift_findings.append("scheduler is complete but COMPLETION.md is missing")
+    if is_run_blocked_state(state) and completion_exists:
+        hard_failures.append("blocked run must not contain COMPLETION.md")
+    if is_run_failed_state(state) and completion_exists:
+        hard_failures.append("failed run must not contain COMPLETION.md")
+    if is_run_complete_state(state) and (blocked_exists or failed_exists):
+        hard_failures.append("completed run must not contain BLOCKED.md or FAILED.md")
+    report_path = terminal_report_path(target, state)
+    if is_run_terminal_state(state) and report_path is not None and not report_path.exists():
+        hard_failures.append(f"terminal run is missing {report_path.name}")
+    if str((sched.get("verification") or {}).get("state") or "").lower() == "passed" and state in {"blocked", "failed"}:
+        hard_failures.append(f"{state} run cannot keep verification.state=passed")
+    if state == "running" and (completion_exists or blocked_exists or failed_exists):
+        hard_failures.append("running run must not contain terminal summary documents")
     completion_score = compute_completion_score(
         target,
         sched,

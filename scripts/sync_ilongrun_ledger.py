@@ -11,6 +11,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from _ilongrun_lib import (
+    is_run_complete_state,
     persist_run_ledger,
     reconcile_scheduler,
     resolve_run_target,
@@ -34,7 +35,7 @@ def main() -> int:
         reason="sync-cli",
         actor="ledger-syncer",
         verify=True,
-        finalize_candidate=True,
+        finalize_candidate=is_run_complete_state(sched.get("state")),
         clean_active_on_complete=args.clean_active_on_complete,
     )
     active_after = target.base.joinpath("state", "active-run-id").read_text(encoding="utf-8").strip() if target.base.joinpath("state", "active-run-id").exists() else ""
