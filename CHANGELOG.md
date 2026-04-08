@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## v0.8.4
+
+### 账本真值与完成态加固
+- **完成态只认 `scheduler.json.state`**：top-level `status` 现在只作为 legacy 兼容读取；一旦与 `state` 冲突，verify 会直接判定 drift
+- **ledger 写盘会自动清理非 canonical 顶层状态字段**：新的 ledger sync / finalize helper 会移除 top-level `status`，避免再次形成双真值
+- **finalize 改成先准备 `COMPLETION.md` 再清理 active 指针**：减少“状态已完成但 completion 丢失”的中间不一致窗口
+
+### Gate Enforcement 与 verifier 语义修复
+- **review placeholder 继续视为伪完成**：`result.md` / `evidence.md` 的空壳、pending、placeholder、TODO/TBD 模板残留会被识别为未完成产物
+- **review/adjudication 缺失改成上下文敏感阻断**：只有进入 audit/finalize 语境或 run 已完成态时，缺失终审/裁决才会成为硬失败；中途运行不再被过早误伤
+- **completion score 与 verdict 收敛**：存在 hard failure 时分数封顶，存在 drift 时分数降级且 verdict 固定为 `state-drift`，不再出现 `ok=false` 同时 `A / prototype-ready`
+
+### sessionEnd / doctor / workspace 安全
+- **`sessionEnd` 现在会自动做一次本地 precheck 落账**：不依赖 Copilot CLI 额度，也能把 verification、recommendedAction、hook precheck 结果写回账本
+- **已完成但缺 `COMPLETION.md` 的 run 不再自动清理 active-run-id**：会保留指针并记录 precheck，避免“账面完成、真实未闭环”
+- **新增工作区污染检查**：若 git 跟踪了 `.copilot-ilongrun/`、`node_modules/`、`dist/`、`build/`、`.next/`、`coverage/` 等生成态目录，verify / doctor 会明确告警或失败
+- **doctor 新增当前工作区 run 健康区块**：直接展示当前 active/latest run 的状态真值冲突、active 指针残留、finalize 缺件、review 伪完成、工作区污染与建议动作
+
+### 文档与回归
+- **新增真实样本复盘文档**：补充 `docs/真实样本复盘-test5-game.md`
+- **新增项目级整改说明**：补充 `docs/项目全局审计与整改说明.md`
+- **README / 快速开始同步更新**：明确 `state` 才是完成态唯一真值，并解释 doctor 的当前工作区 run 健康检查
+- **新增发版说明**：补充 `docs/发版说明-v0.8.4.md`
+- **selftest 补齐回归**：新增状态冲突、review placeholder、sessionEnd precheck、工作区污染等场景，默认仍不依赖 Copilot CLI 真跑额度
+
 ## v0.8.3
 
 ### 模型看板体验统一

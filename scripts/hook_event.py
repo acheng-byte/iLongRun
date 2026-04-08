@@ -10,6 +10,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from _ilongrun_lib import completion_path, is_run_complete_state, persist_run_ledger, reconcile_scheduler, resolve_run_target, verify_scheduler
 from _ilongrun_shared import append_jsonl, now_iso, read_json, read_text, resolve_workspace, write_json_atomic
 
 
@@ -18,6 +19,45 @@ def load_payload() -> dict:
         return json.load(sys.stdin)
     except Exception:
         return {}
+
+
+def persist_hook_precheck(cwd: Path, run_id: str, event: str) -> None:
+    try:
+        target = resolve_run_target(cwd, run_id)
+    except Exception:
+        return
+    sched = reconcile_scheduler(target)
+    finalize_candidate = str(sched.get("phase") or "").strip() == "phase-finalize" or is_run_complete_state(sched.get("state"))
+    verification = verify_scheduler(target, sched, finalize_candidate=finalize_candidate)
+    sched["verification"] = {
+        "state": "passed" if verification.get("ok") else "failed",
+        "hardFailures": verification.get("hardFailures", []),
+        "softWarnings": verification.get("softWarnings", []),
+        "driftFindings": verification.get("driftFindings", []),
+        "recommendedAction": verification.get("recommendedAction"),
+        "failureClass": verification.get("failureClass"),
+        "lastVerifiedAt": now_iso(),
+        "completionScore": verification.get("completionScore"),
+    }
+    recovery = dict(sched.get("recoveryState") or {})
+    recovery["lastRecommendedAction"] = verification.get("recommendedAction")
+    recovery["failureClass"] = verification.get("failureClass")
+    sched["recoveryState"] = recovery
+    runtime = dict(sched.get("runtime") or {})
+    runtime["lastHookPrecheck"] = {
+        "event": event,
+        "ts": now_iso(),
+        "verificationState": sched["verification"]["state"],
+        "failureClass": verification.get("failureClass"),
+    }
+    sched["runtime"] = runtime
+    persist_run_ledger(
+        target,
+        sched,
+        reason=f"hook-{event}-precheck",
+        actor="hook",
+        clean_active_on_complete=is_run_complete_state(sched.get("state")) and completion_path(target).exists() and verification.get("ok"),
+    )
 
 
 def main() -> int:
@@ -35,7 +75,12 @@ def main() -> int:
         run_dir = base / 'runs' / run_id
         scheduler_path = run_dir / 'scheduler.json'
         scheduler = read_json(scheduler_path, {})
-        if str(scheduler.get('state') or '').lower() in {'complete', 'completed', 'finalized'}:
+        target = None
+        try:
+            target = resolve_run_target(cwd, run_id)
+        except Exception:
+            target = None
+        if str(scheduler.get('state') or '').lower() in {'complete', 'completed', 'finalized'} and target and completion_path(target).exists():
             active_path.unlink(missing_ok=True)
             run_id = ''
         else:
@@ -51,6 +96,8 @@ def main() -> int:
                 scheduler['recoveryState'] = recovery
                 scheduler['updatedAt'] = now_iso()
                 write_json_atomic(scheduler_path, scheduler)
+            elif event in {'sessionEnd', 'taskComplete', 'task_complete'}:
+                persist_hook_precheck(cwd, run_id, event)
 
     if event != 'preToolUse' or not run_id:
         return 0

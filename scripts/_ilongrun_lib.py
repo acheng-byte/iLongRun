@@ -64,6 +64,18 @@ COMPLETE_WORKSTREAM_STATUSES = {"complete", "completed", "verified", "done", "su
 ACTIVE_WORKSTREAM_STATUSES = {"running", "pending", "blocked", "in-progress", "active"}
 COMPLETE_RUN_STATES = {"complete", "completed", "finalized"}
 NON_TASK_LIST_PHASE_TOKENS = {"strategy", "verify", "review", "audit", "finalize"}
+TRACKED_GENERATED_ROOTS = (".copilot-ilongrun", "node_modules", "dist", "build", ".next", "coverage")
+PLACEHOLDER_TEXT_MARKERS = (
+    "placeholder",
+    "pending result for `",
+    "pending evidence for `",
+    "todo",
+    "tbd",
+    "to be filled",
+    "待补",
+    "待填写",
+    "模板残留",
+)
 
 
 @dataclass
@@ -428,6 +440,8 @@ def default_workspace_isolation(protocol: dict[str, Any] | None = None) -> dict[
         "baselineStatus": "unknown",
         "skippedReason": None,
         "notes": [],
+        "trackedGeneratedPaths": [],
+        "trackedGeneratedCount": 0,
         "lastAssessedAt": None,
     }
 
@@ -447,6 +461,8 @@ def normalize_workspace_isolation(raw: Any, protocol: dict[str, Any] | None = No
         "baselineStatus": str(raw.get("baselineStatus") or default["baselineStatus"]),
         "skippedReason": raw.get("skippedReason"),
         "notes": [str(item) for item in raw.get("notes") or [] if str(item).strip()],
+        "trackedGeneratedPaths": [str(item) for item in raw.get("trackedGeneratedPaths") or [] if str(item).strip()],
+        "trackedGeneratedCount": int(raw.get("trackedGeneratedCount") or 0),
         "lastAssessedAt": raw.get("lastAssessedAt"),
     }
 
@@ -542,6 +558,8 @@ def assess_workspace_isolation(target: RunTarget, scheduler: dict[str, Any], pro
             "isGitWorkspace": False,
             "baselineStatus": "unknown",
             "skippedReason": "git unavailable",
+            "trackedGeneratedPaths": [],
+            "trackedGeneratedCount": 0,
             "lastAssessedAt": now_iso(),
         })
         return state
@@ -556,6 +574,8 @@ def assess_workspace_isolation(target: RunTarget, scheduler: dict[str, Any], pro
             "isGitWorkspace": False,
             "baselineStatus": "unknown",
             "skippedReason": "non-git workspace",
+            "trackedGeneratedPaths": [],
+            "trackedGeneratedCount": 0,
             "lastAssessedAt": now_iso(),
         })
         return state
@@ -571,6 +591,11 @@ def assess_workspace_isolation(target: RunTarget, scheduler: dict[str, Any], pro
         note = "workspace baseline is dirty before build"
         if note not in notes:
             notes.append(note)
+    tracked_generated = tracked_workspace_pollution_entries(target.workspace)
+    if tracked_generated:
+        pollution_note = f"workspace tracks generated artifacts: {', '.join(tracked_generated)}"
+        if pollution_note not in notes:
+            notes.append(pollution_note)
     state.update({
         "assessed": True,
         "required": parallel_build,
@@ -580,6 +605,8 @@ def assess_workspace_isolation(target: RunTarget, scheduler: dict[str, Any], pro
         "baselineStatus": "dirty" if dirty.stdout.strip() else "clean",
         "skippedReason": None,
         "notes": notes,
+        "trackedGeneratedPaths": tracked_generated,
+        "trackedGeneratedCount": len(tracked_generated),
         "lastAssessedAt": now_iso(),
     })
     return state
@@ -891,7 +918,43 @@ def is_placeholder_work_product(path: Path, text: str | None = None) -> bool:
     if name == "status.json":
         data = read_json(path, {})
         return (data.get("status") or "").lower() in {"", "pending"}
+    if name in {"result.md", "evidence.md"}:
+        normalized = re.sub(r"\s+", " ", body.lower())[:240]
+        if len(body) <= 320 and any(marker in normalized for marker in PLACEHOLDER_TEXT_MARKERS):
+            return True
     return False
+
+
+def tracked_workspace_pollution_entries(workspace: Path) -> list[str]:
+    git_bin = shutil.which("git")
+    if not git_bin:
+        return []
+    inside = subprocess.run(
+        [git_bin, "-C", str(workspace), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if inside.returncode != 0 or inside.stdout.strip().lower() != "true":
+        return []
+    listed = subprocess.run(
+        [git_bin, "-C", str(workspace), "ls-files", "-z", "--", *TRACKED_GENERATED_ROOTS],
+        capture_output=True,
+        text=False,
+        check=False,
+    )
+    if listed.returncode != 0:
+        return []
+    matches: dict[str, str] = {}
+    for raw in listed.stdout.split(b"\x00"):
+        rel = raw.decode("utf-8", errors="ignore").strip().replace("\\", "/")
+        if not rel:
+            continue
+        for root in TRACKED_GENERATED_ROOTS:
+            if rel == root or rel.startswith(f"{root}/") or f"/{root}/" in rel:
+                matches.setdefault(root, rel)
+                break
+    return [root if example == root else f"{root} -> {example}" for root, example in sorted(matches.items())]
 
 
 def normalize_rel_path(value: str | None, fallback: str) -> str:
@@ -1937,7 +2000,7 @@ def normalize_workstream_records(payload: dict[str, Any]) -> None:
 def ensure_scheduler_defaults(scheduler: dict[str, Any] | None) -> dict[str, Any]:
     payload = copy.deepcopy(scheduler or {})
     payload.setdefault("runId", "")
-    payload["state"] = normalize_run_state(payload.get("state") or "running")
+    payload["state"] = normalize_run_state(payload.get("state") or payload.get("status") or "running")
     payload.setdefault("phase", "strategy")
     payload.setdefault("summary", "ILongRun mission initialized")
     payload.setdefault("profile", "office")
@@ -2469,7 +2532,7 @@ def build_plan_markdown(target: RunTarget, scheduler: dict[str, Any]) -> str:
         f"- Review gates: `{len(review_matrix.get('gates') or [])}`",
         "",
         "## Projection & Ledger Consistency",
-        "- Truth source: `scheduler.json` + `workstreams/*/status.json`",
+        "- Truth source: `scheduler.json`（top-level `state` 为完成态唯一真值；legacy `status` 仅兼容读取） + `workstreams/*/status.json`",
         f"- Task-list projections: `{len(scheduler.get('taskLists') or [])}`",
         f"- plan/strategy/task-lists synced at: `{(scheduler.get('projectionState') or {}).get('taskListsSyncedAt')}`",
         f"- Ledger sync: `{(scheduler.get('projectionState') or {}).get('ledgerSyncedAt')}` / `{(scheduler.get('projectionState') or {}).get('ledgerSyncActor') or 'unknown'}` / `{(scheduler.get('projectionState') or {}).get('ledgerSyncReason') or 'unknown'}`",
@@ -2792,6 +2855,7 @@ def persist_run_ledger(
     clean_active_on_complete: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     sched = ensure_scheduler_defaults(copy.deepcopy(scheduler))
+    sched.pop("status", None)
     sched["updatedAt"] = now_iso()
     projection = sched.get("projectionState") or {}
     projection["ledgerSyncedAt"] = sched["updatedAt"]
@@ -3027,9 +3091,20 @@ def compute_completion_score(
     runtime_validated_score = round(sum(1 for _, ok in runtime_checks if ok) * 100 / max(len(runtime_checks), 1))
 
     overall_components = [code_exists_score, wiring_score, tested_score, runtime_validated_score]
-    overall = round(sum(overall_components) / len(overall_components))
+    uncapped_overall = round(sum(overall_components) / len(overall_components))
+    score_cap: int | None = None
+    cap_reason: str | None = None
+    if hard_failures:
+        score_cap = 49
+        cap_reason = "hard-failure"
+    elif drift_findings:
+        score_cap = 69
+        cap_reason = "state-drift"
+    overall = min(uncapped_overall, score_cap) if score_cap is not None else uncapped_overall
     if hard_failures:
         delivery_verdict = "blocked"
+    elif drift_findings:
+        delivery_verdict = "state-drift"
     elif wiring_score < 60:
         delivery_verdict = "implemented-not-wired"
     elif runtime_validated_score < 70:
@@ -3041,6 +3116,9 @@ def compute_completion_score(
 
     return {
         "overall": overall,
+        "overallBeforeCap": uncapped_overall,
+        "scoreCap": score_cap,
+        "capReason": cap_reason,
         "grade": completion_score_grade(overall),
         "deliveryVerdict": delivery_verdict,
         "inference": "evidence-based",
@@ -3358,6 +3436,18 @@ def verify_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None,
     plan_phase = re.search(r"-\s+Active phase:\s+`([^`]+)`", plan_text)
     if plan_phase and str(plan_phase.group(1)).strip() != str(sched.get("phase") or "").strip():
         drift_findings.append(f"plan.md phase drift: {plan_phase.group(1)} != {sched.get('phase')}")
+    raw_state_value = raw_scheduler.get("state")
+    raw_status_value = raw_scheduler.get("status")
+    if raw_status_value is not None:
+        normalized_status = normalize_run_state(raw_status_value)
+        if raw_state_value is not None and normalized_status != normalize_run_state(raw_state_value):
+            drift_findings.append(
+                f"top-level scheduler status conflicts with state: status={raw_status_value} != state={raw_state_value}"
+            )
+        elif normalized_status != normalize_run_state(sched.get("state")):
+            drift_findings.append(
+                f"top-level scheduler status alias drift: status={raw_status_value} != state={sched.get('state')}"
+            )
     workstreams = sched.get("workstreams") or []
     if sched.get("profile") == "coding":
         raw_protocol_version = str(((raw_scheduler.get("codingProtocol") or {}).get("version") or "")).strip()
@@ -3484,12 +3574,15 @@ def verify_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None,
             soft_warnings.append("fleet-involved run completed without any fleet dispatch evidence")
     if sched.get("profile") == "coding":
         workspace_isolation = normalize_workspace_isolation(sched.get("workspaceIsolation"), load_coding_protocol())
+        tracked_generated = [str(item) for item in workspace_isolation.get("trackedGeneratedPaths") or [] if str(item).strip()]
         phase_guards = normalize_phase_guards(sched.get("phaseGuards"), load_coding_protocol())
         claim_verification = normalize_claim_verification(sched.get("claimVerification"), load_coding_protocol())
         if workspace_isolation.get("enabled") and not workspace_isolation.get("assessed"):
             hard_failures.append("workspace isolation assessment missing")
         elif workspace_isolation.get("enabled") and str(workspace_isolation.get("status") or "") not in {"ready", "skipped", "not-required"}:
             hard_failures.append(f"workspace isolation not ready: {workspace_isolation.get('status') or 'unknown'}")
+        if tracked_generated:
+            drift_findings.append(f"workspace tracks generated artifacts: {', '.join(tracked_generated)}")
         if str((phase_guards.get("taskMicrocycle") or {}).get("status") or "") not in {"complete", "not-required"}:
             soft_warnings.append("phase guard taskMicrocycle is not converged yet")
         if str((phase_guards.get("rootCauseBeforeFix") or {}).get("status") or "") == "blocked":
@@ -3515,18 +3608,20 @@ def verify_scheduler(target: RunTarget, scheduler: dict[str, Any] | None = None,
         adjudication_exists = adjudication_path(target).exists() and adjudication_path(target).stat().st_size > 0
         audit_model = (sched.get("reviews") or {}).get("auditModel") or sched.get("codingAuditModel") or "gpt-5.4"
         gate_status = (sched.get("reviews") or {}).get("gateStatus") or {}
+        review_phase = phase_by_id(sched, "phase-review")
+        review_complete = bool(gate_status) and all(status == "complete" for status in gate_status.values())
+        audit_required_now = finalize_candidate or review_complete or is_run_complete_state(sched.get("state"))
         for gate_id, status in gate_status.items():
             if finalize_candidate and status != "complete":
                 hard_failures.append(f"phase-review gate incomplete: {gate_id}")
-        review_phase = phase_by_id(sched, "phase-review")
         if finalize_candidate and review_phase and review_phase.get("status") != "complete":
             hard_failures.append("phase-review is not complete")
-        if not review_exists:
+        if audit_required_now and not review_exists:
             hard_failures.append("reviews/final-review.md is missing")
-        if not adjudication_exists:
+        if audit_required_now and not adjudication_exists:
             hard_failures.append("reviews/adjudication.md is missing")
         pending = int((sched.get("reviews") or {}).get("pendingMustFixCount") or 0)
-        if pending > 0:
+        if audit_required_now and pending > 0:
             hard_failures.append(f"final audit ({audit_model}) still has unresolved must-fix items: {pending}")
     if is_run_complete_state(sched.get("state")) and sched.get("activeWorkstreams"):
         drift_findings.append("scheduler is finalized but activeWorkstreams is not empty")

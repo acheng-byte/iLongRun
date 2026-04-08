@@ -149,6 +149,10 @@ def main() -> int:
     }
     if sched.get("profile") == "coding":
         sched.setdefault("reviews", {})["status"] = "passed" if int((sched.get("reviews") or {}).get("pendingMustFixCount") or 0) == 0 else "failed"
+    completion_file = completion_path(target)
+    completion_body = build_completion_markdown(sched, args.headline, args.status, args.verification_item, args.blocker)
+    if args.status == "complete":
+        write_text_atomic(completion_file, completion_body)
     sched, _ = persist_run_ledger(
         target,
         sched,
@@ -156,7 +160,6 @@ def main() -> int:
         actor="ledger-syncer",
         clean_active_on_complete=args.status == "complete",
     )
-    completion_file = completion_path(target)
     write_text_atomic(completion_file, build_completion_markdown(sched, args.headline, args.status, args.verification_item, args.blocker))
     if args.status == "complete":
         notify(

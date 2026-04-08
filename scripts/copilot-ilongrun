@@ -415,13 +415,15 @@ doctor() {
   local helper_model="$(helper_path manage_ilongrun_model.py || true)"
   local helper_render_board="$(helper_path render_ilongrun_doctor_board.py || true)"
   local helper_skill_lint="$(helper_path lint_ilongrun_skills.py || true)"
+  local helper_verify="$(helper_path verify_ilongrun_run.py || true)"
   local expected_launchers=(ilongrun ilongrun-coding ilongrun-model ilongrun-prompt ilongrun-resume ilongrun-status ilongrun-doctor copilot-ilongrun)
   local coding_playbooks=(phase-define.md phase-plan.md phase-build.md phase-verify.md phase-review.md phase-audit.md phase-finalize.md swarm-policy.md js-ts-profile.md workspace-isolation.md task-microcycle.md claim-verification.md recovery-debug.md skill-engineering.md)
-  local tmp_dir checks_file model_probe_json fleet_probe_json selftest_err selftest_out selftest_state_log fleet_cache_path
+  local tmp_dir checks_file model_probe_json fleet_probe_json selftest_err selftest_out selftest_state_log fleet_cache_path workspace_run_json
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ilongrun-doctor.XXXXXX")"
   checks_file="$tmp_dir/checks.tsv"
   model_probe_json="$tmp_dir/model-probe.json"
   fleet_probe_json="$tmp_dir/fleet-probe.json"
+  workspace_run_json="$tmp_dir/workspace-run.json"
   selftest_err="$tmp_dir/selftest.err"
   selftest_out="$tmp_dir/selftest.out"
   fleet_cache_path="$ILONGRUN_HOME/config/capabilities.json"
@@ -578,6 +580,81 @@ PY
       doctor_row workspace_legacy ok "已清理：$cleanup_action"
       [ -n "$cleanup_archive" ] && doctor_row workspace_archive info "$cleanup_archive"
     fi
+  fi
+  if [ -d "$PWD/.copilot-ilongrun" ] && [ -n "$helper_verify" ]; then
+    local workspace_active_run workspace_latest_run workspace_target_run
+    workspace_active_run="$(cat "$PWD/.copilot-ilongrun/state/active-run-id" 2>/dev/null || true)"
+    workspace_latest_run="$(cat "$PWD/.copilot-ilongrun/state/latest-run-id" 2>/dev/null || true)"
+    workspace_target_run="${workspace_active_run:-$workspace_latest_run}"
+    if [ -n "$workspace_target_run" ]; then
+      doctor_row workspace_run info "active=${workspace_active_run:-none} / latest=${workspace_latest_run:-none} / target=${workspace_target_run}"
+      python3 "$helper_verify" --workspace "$PWD" --run-id "$workspace_target_run" --json >"$workspace_run_json" 2>"$tmp_dir/workspace-run.err" || true
+      if ! python3 - "$workspace_run_json" "$checks_file" <<'PY'
+import json, sys
+from pathlib import Path
+
+payload_path = Path(sys.argv[1])
+checks_path = Path(sys.argv[2])
+try:
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+except Exception:
+    payload = {}
+
+rows = []
+hard = [str(item) for item in payload.get("hardFailures") or []]
+drift = [str(item) for item in payload.get("driftFindings") or []]
+soft = [str(item) for item in payload.get("softWarnings") or []]
+ok = bool(payload.get("ok"))
+scheduler = payload.get("scheduler") or {}
+run_id = str((scheduler.get("runId") or "")).strip() or "unknown"
+
+def add(key: str, status: str, value: str) -> None:
+    rows.append((key, status, value.replace("\t", " ").replace("\n", " ")))
+
+if not payload:
+    add("workspace_run_verification", "warn", "当前工作区 run 健康检查结果不可读")
+    overall_fail = False
+else:
+    if ok:
+        add("workspace_run_verification", "ok", f"run `{run_id}` 账本与门禁通过")
+    else:
+        add("workspace_run_verification", "fail", f"run `{run_id}` 需处理：hard={len(hard)} / drift={len(drift)} / soft={len(soft)}")
+    if payload.get("recommendedAction"):
+        add("workspace_run_action", "info", str(payload.get("recommendedAction")))
+
+    findings = hard + drift
+    state_conflict = next((item for item in findings if "top-level scheduler status" in item), "")
+    add("workspace_run_state_conflict", "fail" if state_conflict else "skip", state_conflict or "未发现 top-level state/status 冲突")
+
+    active_pointer = next((item for item in findings if "active-run-id" in item), "")
+    add("workspace_run_active_pointer", "fail" if active_pointer else "skip", active_pointer or "未发现已完成 run 的 active 指针残留")
+
+    finalize_issue = next((item for item in findings if "COMPLETION.md is missing" in item or "reviews/final-review.md is missing" in item or "reviews/adjudication.md is missing" in item), "")
+    add("workspace_run_finalize", "fail" if finalize_issue else "skip", finalize_issue or "未发现 finalize 必备产物缺失")
+
+    placeholder_issue = next((item for item in findings if "workstream claims complete without full evidence" in item), "")
+    add("workspace_run_review_placeholder", "fail" if placeholder_issue else "skip", placeholder_issue or "未发现 review/result/evidence 伪完成")
+
+    pollution_issue = next((item for item in findings if "workspace tracks generated artifacts" in item), "")
+    add("workspace_run_pollution", "fail" if pollution_issue else "skip", pollution_issue or "未发现 git 跟踪的生成态目录污染")
+    overall_fail = not ok
+
+with checks_path.open("a", encoding="utf-8") as handle:
+    for key, status, value in rows:
+        handle.write(f"{key}\t{status}\t{value}\n")
+
+raise SystemExit(1 if overall_fail else 0)
+PY
+      then
+        issues=$((issues+1))
+      fi
+    else
+      doctor_row workspace_run skip "当前工作区没有 active/latest run"
+    fi
+  elif [ -d "$PWD/.copilot-ilongrun" ]; then
+    doctor_row workspace_run warn "检测到 .copilot-ilongrun，但 verify helper 缺失"
+  else
+    doctor_row workspace_run skip "当前工作区没有 .copilot-ilongrun 运行状态"
   fi
   if [ -n "$screen_bin" ]; then doctor_row screen ok "$screen_bin"; else doctor_row screen warn "未检测到；将无法使用 --detach"; fi
   if [ "$(uname -s)" = "Darwin" ]; then
