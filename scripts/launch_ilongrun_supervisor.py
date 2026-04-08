@@ -96,10 +96,10 @@ def build_command(args, skill_ref: str, payload: str, model: str) -> list[str]:
     cmd = [args.copilot_bin]
     for item in args.plugin_arg:
         cmd.extend(["--plugin-dir", item])
+    # Windows: --add-dir grants file write permission
+    cmd.extend(["--add-dir", str(Path(os.getcwd()))])
     if args.mode in {"run", "resume"}:
-        cmd.extend(["--autopilot", "--yolo", "--no-ask-user", "--max-autopilot-continues", str(args.max_continues)])
-    else:
-        cmd.extend(["--yolo", "--no-ask-user"])
+        cmd.extend(["--max-turns", str(args.max_continues)])
     cmd.extend(["--model", model, "-p", f"{skill_ref} {payload}".strip()])
     return cmd
 
@@ -170,9 +170,29 @@ def resolved_run_paths(args, workspace: Path, run_ref: str) -> dict[str, str]:
 
 
 def run_and_stream(cmd: list[str], cwd: Path, env_patch: dict[str, str] | None = None) -> tuple[int, str]:
+    import sys as _sys, tempfile as _tmp, shlex as _shlex
     env = os.environ.copy()
     if env_patch:
         env.update(env_patch)
+    if _sys.platform == "win32":
+        _bash = env.get("CLAUDE_CODE_GIT_BASH_PATH", "")
+        if _bash and Path(_bash).is_file():
+            def _w2b(p: str) -> str:
+                p = str(p).replace("\\", "/")
+                if len(p) >= 2 and p[1] == ":":
+                    p = "/" + p[0].lower() + p[2:]
+                return p
+            i = cmd.index("-p") if "-p" in cmd else -1
+            if i >= 0 and i + 1 < len(cmd):
+                pf = _tmp.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
+                pf.write(cmd[i + 1])
+                pf.close()
+                rest = cmd[:i] + cmd[i + 2:]
+                cs = " ".join(_shlex.quote(_w2b(str(c))) for c in rest)
+                sf = _tmp.NamedTemporaryFile(mode="w", suffix=".sh", delete=False, encoding="utf-8")
+                sf.write("#!/usr/bin/env bash\n" + cs + " -p \"$(cat " + _shlex.quote(_w2b(pf.name)) + ")\"\n")
+                sf.close()
+                cmd = [_bash, _w2b(sf.name)]
     process = subprocess.Popen(
         cmd,
         cwd=str(cwd),
@@ -180,6 +200,8 @@ def run_and_stream(cmd: list[str], cwd: Path, env_patch: dict[str, str] | None =
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
     )
     chunks: list[str] = []

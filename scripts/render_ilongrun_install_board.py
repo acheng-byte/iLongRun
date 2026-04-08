@@ -203,7 +203,7 @@ def main() -> int:
     print(f"  4. 接着继续：{tone('bright', 'ilongrun-resume')} latest")
     print(f"  5. 环境体检：{tone('bright', 'ilongrun-doctor')}")
     print(f"  6. 刷新模型：{tone('bright', 'ilongrun-doctor')} --refresh-model-cache")
-    if os.uname().sysname == "Darwin":
+    if getattr(os, "uname", lambda: type("u", (), {"sysname": ""})()).sysname == "Darwin":
         print(f"  7. 提醒测试：{tone('bright', 'ilongrun-doctor')} --notify-test")
     print("")
 
