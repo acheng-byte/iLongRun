@@ -169,6 +169,8 @@ def next_steps(rows: dict[str, dict[str, str]], model_payload: dict, refresh_cac
         steps.append(f"自检脚本未通过，可先查看完整日志：{log_path}")
     if any(rows.get(key, {}).get("status") == "fail" for key in ("coding_protocol", "vendor_snapshot", "coding_playbooks", "coding_agents")):
         steps.append("coding protocol bundle 不完整，建议重新执行一键安装脚本补齐 skill playbooks / agents / vendor 快照。")
+    if rows.get("legacy_skill.ilongrun-model", {}).get("status") == "warn":
+        steps.append("检测到旧 `/ilongrun-model` 会话 skill 残留，建议重跑安装脚本，或手动删除 `~/.copilot/skills/ilongrun-model`。")
     models = model_payload.get("models") or {}
     unavailable = [item.get("displayName") or key for key, item in models.items() if item.get("status") == "unavailable"]
     if unavailable:
@@ -237,6 +239,9 @@ def main() -> int:
     legacy_row = rows.get("legacy_plugin")
     if legacy_row:
         print(detail_line("旧插件", f"{status_icon(legacy_row['status'])} {legacy_row['value']}"))
+    legacy_skill_row = rows.get("legacy_skill.ilongrun-model")
+    if legacy_skill_row:
+        print(detail_line("旧会话入口", f"{status_icon(legacy_skill_row['status'])} {legacy_skill_row['value']}"))
     workspace_row = rows.get("workspace_legacy")
     if workspace_row:
         print(detail_line("工作区旧状态", f"{status_icon(workspace_row['status'])} {workspace_row['value']}"))

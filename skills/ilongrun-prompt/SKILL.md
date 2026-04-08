@@ -1,6 +1,6 @@
 ---
 name: ilongrun-prompt
-description: Generate an ILongRun mission prompt skeleton with completeness inference, planner-of-planners decomposition, backend decisions, and final-audit reminders for coding tasks.
+description: 当用户想先生成 iLongRun 任务骨架、拆解策略与执行建议，而不是立刻启动长跑时使用。
 allowed-tools: ["view", "glob", "grep"]
 user-invocable: true
 disable-model-invocation: false

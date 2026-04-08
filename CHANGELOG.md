@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## v0.8.1
+
+### 交互体验修正
+- **`ilongrun-model` 改为终端交互式选模器**：无参在 TTY 终端中进入自建 picker，体验更接近原生 `/model`
+- **非 TTY 无参默认 show**：脚本或管道里直接运行 `ilongrun-model` 时，默认退化为查看当前模板
+- **新增显式子命令与刷新选项**：支持 `ilongrun-model show` 与 `ilongrun-model --refresh`
+- **不再桥接当前 Copilot 会话模型**：`ilongrun-model` 只改 iLongRun 默认模板，不改当前会话的原生 `/model`
+
+### 会话入口与菜单说明
+- **移除 `/ilongrun-model` 会话入口**：不再把它作为 Copilot CLI 会话内 skill 暴露
+- **升级安装会清理旧残留**：安装链路会主动移除历史 `~/.copilot/skills/ilongrun-model`
+- **`/ilongrun*` 菜单说明中文化**：`/ilongrun`、`/ilongrun-prompt`、`/ilongrun-resume`、`/ilongrun-status` 的 frontmatter description 统一改成中文触发句
+- **doctor 改为提示 legacy skill 残留**：若检测到旧 `/ilongrun-model` skill，只给 warn，不再作为缺失项报错
+
+### 规则与文档
+- **skill lint 允许中英文 trigger-first description**：接受 `Use when...` / `当用户...时使用` / `当需要...时使用`
+- **默认 lint 目标调整**：移除 `ilongrun-model`，补上 `ilongrun-prompt`
+- **README / 快速开始同步改口**：明确 `ilongrun-model` 是裸命令，不再宣传 `/ilongrun-model`
+- **新增发版说明**：补充 `docs/发版说明-v0.8.1.md`
+
 ## v0.8.0
 
 ### 新增

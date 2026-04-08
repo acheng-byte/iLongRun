@@ -105,16 +105,36 @@ ilongrun-coding --model claude-haiku-4.5 "修一个小 bug，并补测试"
 
 ```bash
 ilongrun-model
+ilongrun-model show
+ilongrun-model --refresh
 ilongrun-model claude-haiku-4.5
 ilongrun-model reset
 ```
 
 这条命令的语义是：
 
+- 在 **TTY 终端**里直接运行 `ilongrun-model`，会进入交互式选模器
+- 在 **非 TTY** 场景里直接运行 `ilongrun-model`，会退化为 `show`
+- `show` 用于脚本化查看当前模板；`--refresh` 会先刷新模型缓存，再进入选模器或 show
 - 只影响**后续新启动**的 `ilongrun` / `ilongrun-coding`
 - 不会回写当前正在跑的 run
 - `resume` 仍优先继承目标 run 既有的 `selectedModel`
 - review roles / final audit 仍保持独立审查模板（默认 `gpt-5.4`）
+- 不会改变你当前 Copilot CLI 会话里的原生 `/model` 选择
+
+### Copilot 会话里有哪些 `/ilongrun*` 入口？
+
+当前会话菜单里保留这些中文说明的入口：
+
+- `/ilongrun`
+- `/ilongrun-prompt`
+- `/ilongrun-resume`
+- `/ilongrun-status`
+
+注意：
+
+- `ilongrun-model` 现在是**终端裸命令**
+- 不再作为 Copilot 会话内的 `/ilongrun-model` skill 暴露
 
 ## 7. 常用命令
 
@@ -122,7 +142,7 @@ ilongrun-model reset
 |---|---|
 | `ilongrun "<任务>"` | 通用长跑入口，自动判断任务画像 |
 | `ilongrun-coding "<任务>"` | coding 专用入口，固定走 coding 生命周期 |
-| `ilongrun-model [<model>\|reset]` | 查看 / 切换后续新任务的默认主模型模板 |
+| `ilongrun-model [show\|<model>\|reset] [--refresh]` | 在终端里交互式 / 脚本化查看与切换后续新任务的默认主模型模板 |
 | `ilongrun-prompt "<任务>"` | 只生成策略骨架，不进入完整长跑 |
 | `ilongrun-status latest` | 查看最近一次 run 的中文状态看板 |
 | `ilongrun-resume latest` | 继续上一次 run |
@@ -208,6 +228,11 @@ coding 任务还要关注：
 - 想长期把默认主模型切到别的 slug，用 `ilongrun-model`
 - 想只让当前这一次 run 强制锁模，用 `--model`
 
+补充一点：
+
+- `ilongrun-model` 不会改你当前 Copilot CLI 会话的原生 `/model`
+- 它只改 iLongRun 的默认模板配置
+
 ### Q6：`/fleet` 一定会用吗？
 
 不会。
@@ -220,5 +245,5 @@ coding 任务还要关注：
 - [架构与运行机制](./docs/架构与运行机制.md)
 - [项目全局审计与整改说明](./docs/项目全局审计与整改说明.md)
 - [内部命名清理说明](./docs/内部命名清理说明.md)
-- [发版说明 v0.8.0](./docs/发版说明-v0.8.0.md)
+- [发版说明 v0.8.1](./docs/发版说明-v0.8.1.md)
 - [更新日志](./CHANGELOG.md)

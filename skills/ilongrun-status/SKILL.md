@@ -1,6 +1,6 @@
 ---
 name: ilongrun-status
-description: Use when the user wants a read-only Chinese status board for an iLongRun run, including phases, waves, workstreams, quality gates, and methodology guard state.
+description: 当用户要查看 iLongRun run 的中文只读状态看板，并了解 phase、wave、workstream 与门禁状态时使用。
 allowed-tools: ["view", "glob", "grep", "bash"]
 user-invocable: true
 disable-model-invocation: false

@@ -44,7 +44,7 @@ usage() {
 Usage:
   ilongrun "<task>"
   ilongrun-coding "<coding-task>"
-  ilongrun-model [<model>|reset]
+  ilongrun-model [show|<model>|reset] [--refresh]
   ilongrun-prompt "<task>"
   ilongrun-resume [run-id|latest]
   ilongrun-status [run-id|latest]
@@ -53,7 +53,7 @@ Usage:
 Advanced:
   copilot-ilongrun run [--detach] [--max-continues N] [--model MODEL] [--dry-run] <task>
   copilot-ilongrun coding [--detach] [--max-continues N] [--model MODEL] [--dry-run] <task>
-  copilot-ilongrun model [<model>|reset]
+  copilot-ilongrun model [show|<model>|reset] [--refresh]
   copilot-ilongrun prompt [--model MODEL] [--dry-run] <task>
   copilot-ilongrun resume [--detach] [--max-continues N] [--model MODEL] [run-id|latest]
   copilot-ilongrun status [run-id|latest]
@@ -548,10 +548,9 @@ PY
     issues=$((issues+1))
   fi
   if [ -f "$HOME/.copilot/skills/ilongrun-model/SKILL.md" ]; then
-    doctor_row skill.ilongrun-model ok "$HOME/.copilot/skills/ilongrun-model"
+    doctor_row legacy_skill.ilongrun-model warn "$HOME/.copilot/skills/ilongrun-model（legacy 会话入口残留，可清理）"
   else
-    doctor_row skill.ilongrun-model fail "未检测到 /ilongrun-model skill"
-    issues=$((issues+1))
+    doctor_row legacy_skill.ilongrun-model skip "未发现旧 /ilongrun-model skill 残留"
   fi
   if legacy_plugin_enabled; then
     if auto_uninstall_legacy_plugin >/dev/null 2>&1; then

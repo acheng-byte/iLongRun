@@ -39,6 +39,19 @@ install_copied_file() {
   cp "$source" "$target"
 }
 
+remove_path_if_exists() {
+  local target="$1"
+  if [ -L "$target" ] || [ -f "$target" ]; then
+    rm -f "$target"
+    printf 'Removed legacy path: %s\n' "$target"
+    return
+  fi
+  if [ -d "$target" ]; then
+    rm -rf "$target"
+    printf 'Removed legacy path: %s\n' "$target"
+  fi
+}
+
 migrate_model_policy() {
   local source_template="$1"
   local target_config="$2"
@@ -189,6 +202,7 @@ EOF2
 
 for skill_dir in "$ROOT_DIR"/skills/*; do
   [ -d "$skill_dir" ] || continue
+  [ -f "$skill_dir/SKILL.md" ] || continue
   skill_name="$(basename "$skill_dir")"
   install_copied_dir "$skill_dir" "$TARGET_SKILLS_DIR/$skill_name"
   printf 'Installed skill: /%s\n' "$skill_name"
@@ -264,6 +278,8 @@ done
 
 maybe_install_terminal_notifier
 
+remove_path_if_exists "$TARGET_SKILLS_DIR/ilongrun-model"
+
 if [ -f "$HELPER_CONFIG_DIR/model-policy.jsonc" ]; then
   printf 'Preserved existing model policy: %s\n' "$HELPER_CONFIG_DIR/model-policy.jsonc"
 elif [ -f "$HELPER_CONFIG_DIR/model-policy.json" ]; then
@@ -297,7 +313,6 @@ Done.
 
 You can now use these Copilot bare commands:
   /ilongrun
-  /ilongrun-model
   /ilongrun-prompt
   /ilongrun-resume
   /ilongrun-status
@@ -305,6 +320,10 @@ You can now use these Copilot bare commands:
 Installed internal discipline skill:
   /ilongrun-coding
   （供 iLongRun 在 coding mission 中自动加载；终端用户入口是后续安装的 shell 命令 `ilongrun-coding`）
+
+Shell model picker:
+  ilongrun-model
+  （这是终端裸命令；不再作为 Copilot 会话内的 `/ilongrun-model` skill 暴露）
 
 ILongRun helper bundle:
   $HELPER_BIN_DIR

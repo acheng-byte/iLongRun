@@ -24,7 +24,7 @@ from _ilongrun_terminal_theme import (
 COMMANDS = [
     ("ilongrun", "通用长跑入口"),
     ("ilongrun-coding", "显式代码任务入口"),
-    ("ilongrun-model", "热切换默认主模型"),
+    ("ilongrun-model", "交互式选择默认主模型"),
     ("ilongrun-prompt", "只生成策略骨架"),
     ("ilongrun-resume", "继续上一次任务"),
     ("ilongrun-status", "查看状态看板"),

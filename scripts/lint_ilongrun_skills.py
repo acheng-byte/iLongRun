@@ -29,24 +29,31 @@ REQUIRED_CODING_PLAYBOOKS = [
 DEFAULT_TARGETS = [
     DEFAULT_SKILLS_ROOT / "ilongrun" / "SKILL.md",
     DEFAULT_SKILLS_ROOT / "ilongrun-coding" / "SKILL.md",
-    DEFAULT_SKILLS_ROOT / "ilongrun-model" / "SKILL.md",
+    DEFAULT_SKILLS_ROOT / "ilongrun-prompt" / "SKILL.md",
     DEFAULT_SKILLS_ROOT / "ilongrun-resume" / "SKILL.md",
     DEFAULT_SKILLS_ROOT / "ilongrun-status" / "SKILL.md",
 ]
 REQUIRED_HEADINGS = {
     "ilongrun": ["## 总原则", "## 编排要求", "## Verification Checklist"],
     "ilongrun-coding": ["## 协议定位", "## 生命周期路由", "## wave / backend 规则", "## workstream 最小合同字段", "## Skill Engineering"],
-    "ilongrun-model": ["## 总原则", "## 执行方式", "## 输出要求"],
+    "ilongrun-prompt": [],
     "ilongrun-resume": [],
     "ilongrun-status": ["## Resolve run", "## 读取顺序", "## 输出要求"],
 }
 TOKEN_BUDGET = {
     "ilongrun": 2600,
     "ilongrun-coding": 3200,
-    "ilongrun-model": 1400,
+    "ilongrun-prompt": 900,
     "ilongrun-resume": 1200,
     "ilongrun-status": 2200,
 }
+
+
+TRIGGER_FIRST_PATTERNS = (
+    re.compile(r"^Use when\b"),
+    re.compile(r"^当用户.+时使用[。.]?$"),
+    re.compile(r"^当需要.+时使用[。.]?$"),
+)
 
 
 def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -107,8 +114,8 @@ def lint_one(path: Path, *, skills_root: Path) -> dict[str, Any]:
     skill_name = path.parent.name if path.name == "SKILL.md" else path.stem
     desc = frontmatter.get("description", "")
     if path.name == "SKILL.md":
-        if not desc.startswith("Use when"):
-            findings.append("frontmatter description must start with 'Use when'")
+        if not any(pattern.match(desc) for pattern in TRIGGER_FIRST_PATTERNS):
+            findings.append("frontmatter description must start with 'Use when' or '当用户...时使用'/'当需要...时使用'")
         for heading in REQUIRED_HEADINGS.get(skill_name, []):
             if heading not in body:
                 findings.append(f"missing required heading: {heading}")

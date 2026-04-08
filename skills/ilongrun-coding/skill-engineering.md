@@ -6,7 +6,7 @@
 
 ## 规则
 
-- frontmatter `description` 只写 `Use when...`
+- frontmatter `description` 只写 trigger-first 触发句（允许 `Use when...` / `当用户...时使用` / `当需要...时使用`）
 - 高频 skill 要保持短、准、可交叉引用
 - 复杂流程拆到 playbook，不要把顶层 skill 写成巨型文档
 - 需要有 skill lint

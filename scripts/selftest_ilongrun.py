@@ -223,6 +223,36 @@ def main() -> int:
 
         external_workspace = temp_root / "external-workspace"
         external_workspace.mkdir(parents=True, exist_ok=True)
+        fake_bin = temp_root / "fake-bin"
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        fake_copilot = fake_bin / "copilot"
+        fake_copilot.write_text("#!/usr/bin/env bash\necho OK\n", encoding="utf-8")
+        fake_copilot.chmod(0o755)
+        refresh_env = {
+            "ILONGRUN_HOME": str(model_home),
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            "COPILOT_GITHUB_TOKEN": "test-token",
+        }
+
+        model_show_text = subprocess.run(
+            ["python3", str(ROOT / "manage_ilongrun_model.py"), "--workspace", str(external_workspace)],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "ILONGRUN_HOME": str(model_home)},
+        )
+        assert model_show_text.returncode == 0
+        assert "iLongRun 主模型模板" in model_show_text.stdout
+        assert "run=`claude-sonnet-4.6`" in model_show_text.stdout
+
+        model_show_explicit = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(external_workspace),
+            "--json",
+            "show",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        assert json.loads(model_show_explicit.stdout)["mode"] == "show"
+
         model_show = run(
             str(ROOT / "manage_ilongrun_model.py"),
             "--workspace", str(external_workspace),
@@ -234,6 +264,18 @@ def main() -> int:
         assert len(model_show_payload["targets"]) == 1
         assert model_show_payload["targets"][0]["scope"] == "install"
         assert model_show_payload["skippedRepoPath"]
+
+        model_refresh = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(external_workspace),
+            "--json",
+            "--refresh",
+            env=refresh_env,
+        )
+        model_refresh_payload = json.loads(model_refresh.stdout)
+        assert model_refresh_payload["mode"] == "show"
+        assert model_refresh_payload["refresh"]["status"] == "refreshed"
+        assert model_refresh_payload["refresh"]["models"]["claude-sonnet-4.6"]["status"] == "available"
 
         model_set = run(
             str(ROOT / "manage_ilongrun_model.py"),
@@ -274,6 +316,25 @@ def main() -> int:
         )
         assert bad_model.returncode == 2
         assert json.loads(bad_model.stdout)["ok"] is False
+
+        picker_set = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(fake_repo),
+            "--json",
+            "--test-select", "gpt-5-mini",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        picker_set_payload = json.loads(picker_set.stdout)
+        assert picker_set_payload["mode"] == "set"
+        assert picker_set_payload["selectionSource"] == "picker"
+        install_after_picker = read_json(install_config_path)
+        repo_after_picker = read_json(fake_repo / "config" / "model-policy.jsonc")
+        for payload in (install_after_picker, repo_after_picker):
+            assert payload["commandDefaults"]["run"] == "gpt-5-mini"
+            assert payload["commandDefaults"]["coding"] == "gpt-5-mini"
+            assert payload["roleModels"]["executor"] == "gpt-5-mini"
+            assert payload["roleModels"]["code-reviewer"] == "gpt-5.4"
+            assert payload["codingAuditModel"] == "gpt-5.4"
 
         model_reset = run(
             str(ROOT / "manage_ilongrun_model.py"),
@@ -443,7 +504,7 @@ def main() -> int:
                     "coding_agents\tok\t/tmp/agents",
                     "skill_lint\tok\t/tmp/lint_ilongrun_skills.py",
                     "model_helper\tok\t/tmp/manage_ilongrun_model.py",
-                    "skill.ilongrun-model\tok\t/tmp/skills/ilongrun-model",
+                    "legacy_skill.ilongrun-model\twarn\t/tmp/skills/ilongrun-model（legacy 会话入口残留，可清理）",
                     "legacy_plugin\tok\t未启用（copilot-mission-control）",
                     "workspace_legacy\tok\t未发现旧工作区残留",
                     "screen\tok\t/usr/bin/screen",
@@ -499,6 +560,7 @@ def main() -> int:
         )
         assert "环境体检看板" in doctor_board.stdout
         assert "模型缓存刷新结果" in doctor_board.stdout
+        assert "旧会话入口" in doctor_board.stdout
         assert "倾力制作～" in doctor_board.stdout
 
         bad_skill = temp_root / "bad-skill" / "SKILL.md"
@@ -515,9 +577,9 @@ def main() -> int:
         )
         lint_fail_payload = json.loads(lint_fail.stdout)
         assert lint_fail.returncode != 0
-        assert "Use when" in " ".join(lint_fail_payload["results"][0]["findings"])
+        assert "frontmatter description must start" in " ".join(lint_fail_payload["results"][0]["findings"])
         bad_skill.write_text(
-            "---\nname: demo\ndescription: Use when you need a tiny demo skill.\n---\n\n## Demo\n\n- ok\n",
+            "---\nname: demo\ndescription: 当用户需要一个极小的 demo skill 时使用。\n---\n\n## Demo\n\n- ok\n",
             encoding="utf-8",
         )
         lint_fix = run(

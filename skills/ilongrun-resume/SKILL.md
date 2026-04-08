@@ -1,6 +1,6 @@
 ---
 name: ilongrun-resume
-description: Use when you need to resume an existing iLongRun run, converge only the unfinished gates, and avoid redoing work that already passed ledger checks.
+description: 当用户要恢复已有 iLongRun run、只继续未完成门禁并避免重复已通过账本检查的工作时使用。
 allowed-tools: "*"
 user-invocable: true
 disable-model-invocation: false

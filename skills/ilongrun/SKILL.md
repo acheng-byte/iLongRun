@@ -1,6 +1,6 @@
 ---
 name: ilongrun
-description: Use when the user wants a resumable long-running mission with scheduler-led orchestration, phase/wave planning, recoverability, and final delivery gates.
+description: 当用户要启动可恢复、可长跑、分阶段编排并带最终交付门禁的 iLongRun 任务时使用。
 allowed-tools: "*"
 user-invocable: true
 disable-model-invocation: false
