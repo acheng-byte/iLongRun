@@ -113,9 +113,17 @@ ilongrun-model reset
 
 这条命令的语义是：
 
-- 在 **TTY 终端**里直接运行 `ilongrun-model`，会进入交互式选模器
+- 在 **TTY 终端**里直接运行 `ilongrun-model`，会进入带 Tab 页签的交互式选模器
 - 在 **非 TTY** 场景里直接运行 `ilongrun-model`，会退化为 `show`
-- `show` 用于脚本化查看当前模板；`--refresh` 会先刷新模型缓存，再进入选模器或 show
+- `show` 现在会输出与 `ilongrun` 体系一致的品牌化中文看板；如果要脚本化消费，请使用 `--json`
+- `--refresh` 会先刷新模型缓存，再进入选模器或 show
+- 交互式 TUI 顶部有 3 个页签：
+  - `全局默认`：同时更新 `ilongrun` 与 `ilongrun-coding`
+  - `run模型`：只更新 `ilongrun`
+  - `coding模型`：只更新 `ilongrun-coding`
+- 在交互式 TUI 里可以用 `Tab` / `Shift+Tab` / 左右方向键切页；`r` 会弹确认并执行**全局 reset**
+- **只有交互式 TUI 才区分上述作用域**
+- 直接运行 `ilongrun-model <slug>` 仍是**全局模式**
 - 只影响**后续新启动**的 `ilongrun` / `ilongrun-coding`
 - 不会回写当前正在跑的 run
 - `resume` 仍优先继承目标 run 既有的 `selectedModel`
@@ -142,7 +150,7 @@ ilongrun-model reset
 |---|---|
 | `ilongrun "<任务>"` | 通用长跑入口，自动判断任务画像 |
 | `ilongrun-coding "<任务>"` | coding 专用入口，固定走 coding 生命周期 |
-| `ilongrun-model [show\|<model>\|reset] [--refresh]` | 在终端里交互式 / 脚本化查看与切换后续新任务的默认主模型模板 |
+| `ilongrun-model [show\|<model>\|reset] [--refresh]` | 在终端里交互式 / 脚本化查看与切换后续新任务的默认主模型模板；TTY 交互界面支持 `全局默认 / run模型 / coding模型` Tab 页签 |
 | `ilongrun-prompt "<任务>"` | 只生成策略骨架，不进入完整长跑 |
 | `ilongrun-status latest` | 查看最近一次 run 的中文状态看板 |
 | `ilongrun-resume latest` | 继续上一次 run |
@@ -232,6 +240,8 @@ coding 任务还要关注：
 
 - `ilongrun-model` 不会改你当前 Copilot CLI 会话的原生 `/model`
 - 它只改 iLongRun 的默认模板配置
+- `ilongrun-model <model>` 是**全局模式**
+- 如果你想只改 `run` 或只改 `coding`，请在 `ilongrun-model` 的交互式 TUI 中切到对应页签后再选模型
 
 ### Q6：`/fleet` 一定会用吗？
 
@@ -245,5 +255,5 @@ coding 任务还要关注：
 - [架构与运行机制](./docs/架构与运行机制.md)
 - [项目全局审计与整改说明](./docs/项目全局审计与整改说明.md)
 - [内部命名清理说明](./docs/内部命名清理说明.md)
-- [发版说明 v0.8.1](./docs/发版说明-v0.8.1.md)
+- [发版说明 v0.8.3](./docs/发版说明-v0.8.3.md)
 - [更新日志](./CHANGELOG.md)

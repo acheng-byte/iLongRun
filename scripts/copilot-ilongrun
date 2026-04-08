@@ -59,6 +59,12 @@ Advanced:
   copilot-ilongrun status [run-id|latest]
   copilot-ilongrun doctor [--refresh-model-cache] [--notify-test]
   copilot-ilongrun selftest
+
+Notes:
+  ilongrun-model 在 TTY 终端里支持 Tab 页签：
+    全局默认 / run模型 / coding模型
+  只有交互式 TUI 才区分这些作用域；
+  直接运行 ilongrun-model <model> 仍然是全局模式。
 EOF
 }
 

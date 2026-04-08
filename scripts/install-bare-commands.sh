@@ -324,6 +324,7 @@ Installed internal discipline skill:
 Shell model picker:
   ilongrun-model
   （这是终端裸命令；不再作为 Copilot 会话内的 `/ilongrun-model` skill 暴露）
+  （TTY 交互式界面支持 Tab 页签：全局默认 / run模型 / coding模型）
 
 ILongRun helper bundle:
   $HELPER_BIN_DIR

@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+## v0.8.3
+
+### 模型看板体验统一
+- **`ilongrun-model show` 改为品牌化看板输出**：文本模式现在统一使用 iLongRun 的终端品牌视觉、中文区块标题与新手导向文案
+- **脚本消费建议切换到 `--json`**：`show` 面向人类阅读，`--json` 继续保留稳定机器语义
+- **TUI 渲染容错增强**：修复小终端尺寸下 `curses.addnstr()` 可能抛出的 `addnwstr() returned ERR`，避免交互式选模器直接退回 show
+- **新增发版说明**：补充 `docs/发版说明-v0.8.3.md`
+
+## v0.8.2
+
+### 交互式选模器增强
+- **`ilongrun-model` 新增 Tab 页签模式**：TTY 交互式 TUI 现在支持 `全局默认 / run模型 / coding模型` 三个页签
+- **Tab 切页与作用域写入**：`Tab` / `Shift+Tab` / 左右方向键可切页，`Enter` 会按当前页签写入对应模型模板
+- **新增全局 reset 热键**：在交互式 TUI 里按 `r` 会弹确认，并执行全局 reset
+- **命令行直设仍保持全局语义**：`ilongrun-model <model>` / `show` / `reset` 继续只走全局模式，不新增公开 CLI scope 参数
+
+### 模型模板写入语义
+- **全局默认页签保持现有行为**：同时更新 `commandDefaults.run / coding`、`skillDefaults.ilongrun / ilongrun-coding` 与全局主执行角色模板
+- **run模型页签采用浅作用域**：只更新 `commandDefaults.run` 与 `skillDefaults.ilongrun`
+- **coding模型页签采用浅作用域**：只更新 `commandDefaults.coding` 与 `skillDefaults.ilongrun-coding`
+- **不扩协议**：不新增配置字段，也不拆分共享 `roleModels`
+- **审查与终审不变**：`codingAuditModel`、`roleModels.final-audit-reviewer` 与 review 固定角色保持原策略
+
+### 测试与文档
+- **模型管理 helper 增加隐藏测试入口**：新增 `--test-tab` 与 `--test-reset`，用于自测 run/coding 页签写入与 TUI reset 语义
+- **selftest 覆盖页签作用域**：新增断言，验证 run/coding 页签只改浅作用域字段，全局 reset 仍恢复默认模板
+- **README / 快速开始同步更新**：明确 Tab 分页作用域只存在于交互式 TUI，命令行直设 `<model>` 仍是全局模式
+- **新增发版说明**：补充 `docs/发版说明-v0.8.2.md`
+
 ## v0.8.1
 
 ### 交互体验修正

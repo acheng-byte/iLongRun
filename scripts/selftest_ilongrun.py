@@ -241,8 +241,10 @@ def main() -> int:
             env={**os.environ, "ILONGRUN_HOME": str(model_home)},
         )
         assert model_show_text.returncode == 0
-        assert "iLongRun 主模型模板" in model_show_text.stdout
-        assert "run=`claude-sonnet-4.6`" in model_show_text.stdout
+        assert "主模型模板看板" in model_show_text.stdout
+        assert "全局默认 · 同时更新 ilongrun 与 ilongrun-coding" in model_show_text.stdout
+        assert "Claude Sonnet 4.6" in model_show_text.stdout
+        assert "Claude Opus 4.6" in model_show_text.stdout
 
         model_show_explicit = run(
             str(ROOT / "manage_ilongrun_model.py"),
@@ -287,6 +289,7 @@ def main() -> int:
         model_set_payload = json.loads(model_set.stdout)
         assert model_set_payload["mode"] == "set"
         assert model_set_payload["effectiveModel"] == "claude-haiku-4.5"
+        assert model_set_payload["writeScope"] == "global"
         assert {item["scope"] for item in model_set_payload["targets"]} == {"install", "repo"}
         install_after_set = read_json(install_config_path)
         repo_after_set = read_json(fake_repo / "config" / "model-policy.jsonc")
@@ -327,6 +330,7 @@ def main() -> int:
         picker_set_payload = json.loads(picker_set.stdout)
         assert picker_set_payload["mode"] == "set"
         assert picker_set_payload["selectionSource"] == "picker"
+        assert picker_set_payload["writeScope"] == "global"
         install_after_picker = read_json(install_config_path)
         repo_after_picker = read_json(fake_repo / "config" / "model-policy.jsonc")
         for payload in (install_after_picker, repo_after_picker):
@@ -336,15 +340,75 @@ def main() -> int:
             assert payload["roleModels"]["code-reviewer"] == "gpt-5.4"
             assert payload["codingAuditModel"] == "gpt-5.4"
 
+        run_scope_before_install = read_json(install_config_path)
+        run_scope_before_repo = read_json(fake_repo / "config" / "model-policy.jsonc")
+        run_scope_set = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(fake_repo),
+            "--json",
+            "--test-tab", "run",
+            "--test-select", "claude-sonnet-4.5",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        run_scope_payload = json.loads(run_scope_set.stdout)
+        assert run_scope_payload["mode"] == "set"
+        assert run_scope_payload["selectionSource"] == "picker"
+        assert run_scope_payload["writeScope"] == "run"
+        assert run_scope_payload["pickerTab"] == "run"
+        install_after_run_scope = read_json(install_config_path)
+        repo_after_run_scope = read_json(fake_repo / "config" / "model-policy.jsonc")
+        for before_payload, after_payload in (
+            (run_scope_before_install, install_after_run_scope),
+            (run_scope_before_repo, repo_after_run_scope),
+        ):
+            assert after_payload["commandDefaults"]["run"] == "claude-sonnet-4.5"
+            assert after_payload["skillDefaults"]["ilongrun"] == "claude-sonnet-4.5"
+            assert after_payload["commandDefaults"]["coding"] == before_payload["commandDefaults"]["coding"]
+            assert after_payload["skillDefaults"]["ilongrun-coding"] == before_payload["skillDefaults"]["ilongrun-coding"]
+            assert after_payload["roleModels"] == before_payload["roleModels"]
+            assert after_payload["codingAuditModel"] == before_payload["codingAuditModel"]
+
+        coding_scope_before_install = read_json(install_config_path)
+        coding_scope_before_repo = read_json(fake_repo / "config" / "model-policy.jsonc")
+        coding_scope_set = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(fake_repo),
+            "--json",
+            "--test-tab", "coding",
+            "--test-select", "claude-opus-4.5",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        coding_scope_payload = json.loads(coding_scope_set.stdout)
+        assert coding_scope_payload["mode"] == "set"
+        assert coding_scope_payload["selectionSource"] == "picker"
+        assert coding_scope_payload["writeScope"] == "coding"
+        assert coding_scope_payload["pickerTab"] == "coding"
+        install_after_coding_scope = read_json(install_config_path)
+        repo_after_coding_scope = read_json(fake_repo / "config" / "model-policy.jsonc")
+        for before_payload, after_payload in (
+            (coding_scope_before_install, install_after_coding_scope),
+            (coding_scope_before_repo, repo_after_coding_scope),
+        ):
+            assert after_payload["commandDefaults"]["coding"] == "claude-opus-4.5"
+            assert after_payload["skillDefaults"]["ilongrun-coding"] == "claude-opus-4.5"
+            assert after_payload["commandDefaults"]["run"] == before_payload["commandDefaults"]["run"]
+            assert after_payload["skillDefaults"]["ilongrun"] == before_payload["skillDefaults"]["ilongrun"]
+            assert after_payload["roleModels"] == before_payload["roleModels"]
+            assert after_payload["codingAuditModel"] == before_payload["codingAuditModel"]
+
         model_reset = run(
             str(ROOT / "manage_ilongrun_model.py"),
             "--workspace", str(fake_repo),
             "--json",
-            "reset",
+            "--test-tab", "run",
+            "--test-reset",
             env={"ILONGRUN_HOME": str(model_home)},
         )
         model_reset_payload = json.loads(model_reset.stdout)
         assert model_reset_payload["mode"] == "reset"
+        assert model_reset_payload["selectionSource"] == "picker"
+        assert model_reset_payload["writeScope"] == "global"
+        assert model_reset_payload["pickerTab"] == "run"
         install_after_reset = read_json(install_config_path)
         repo_after_reset = read_json(fake_repo / "config" / "model-policy.jsonc")
         for payload in (install_after_reset, repo_after_reset):
@@ -358,6 +422,17 @@ def main() -> int:
             assert payload["roleModels"]["test-engineer"] == "gpt-5.4"
             assert payload["roleModels"]["security-auditor"] == "gpt-5.4"
 
+        direct_model_reset = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(fake_repo),
+            "--json",
+            "reset",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        direct_model_reset_payload = json.loads(direct_model_reset.stdout)
+        assert direct_model_reset_payload["mode"] == "reset"
+        assert direct_model_reset_payload["writeScope"] == "global"
+
         model_cli = subprocess.run(
             ["bash", str(ROOT / "copilot-ilongrun"), "model"],
             capture_output=True,
@@ -366,7 +441,7 @@ def main() -> int:
             env={**os.environ, "ILONGRUN_HOME": str(model_home)},
         )
         assert model_cli.returncode == 0
-        assert "iLongRun 主模型模板" in model_cli.stdout
+        assert "主模型模板看板" in model_cli.stdout
         assert "gpt-5.4" in model_cli.stdout
 
         dry_env = {**os.environ, "ILONGRUN_HOME": str(model_home), "COPILOT_GITHUB_TOKEN": "test-token", "COPILOT_BIN": "python3"}
