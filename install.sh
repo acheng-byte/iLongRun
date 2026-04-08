@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# NOTE: For Windows, use scripts/install.bat or scripts/install.ps1 instead.
 set -euo pipefail
 
 REPO_SLUG="izscc/iLongRun"

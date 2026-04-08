@@ -253,6 +253,14 @@ def workstream_evidence_path(target: RunTarget, workstream_id: str) -> Path:
     return workstream_dir(target, workstream_id) / "evidence.md"
 
 
+def sources_path(target: RunTarget) -> Path:
+    return target.run_dir / "sources.jsonl"
+
+
+def stable_source_id(url: str, title: str = "") -> str:
+    return hashlib.sha1(f"{url}|{title}".encode("utf-8")).hexdigest()[:12]
+
+
 def legacy_run_dir(target: RunTarget) -> Path:
     return target.base / target.run_id
 
