@@ -15,7 +15,7 @@ from urllib.parse import quote
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from _ilongrun_lib import completion_path, plan_path, resolve_run_target, strategy_path
+from _ilongrun_lib import blocked_path, completion_path, failed_path, plan_path, resolve_run_target, strategy_path
 from _ilongrun_shared import read_json, resolve_workspace, write_json_atomic
 
 DEFAULT_COPY: dict[str, dict[str, object]] = {
@@ -135,10 +135,14 @@ def resolve_open_target(workspace: Path, run_id: str | None, event: str, explici
             return fallback_run_dir
         return workspace
 
-    if event in {"complete", "blocked"}:
+    if event == "complete":
         candidate = completion_path(target)
         if candidate.exists():
             return candidate
+    if event == "blocked":
+        for candidate in (blocked_path(target), failed_path(target)):
+            if candidate.exists():
+                return candidate
     for candidate in (plan_path(target), strategy_path(target), target.run_dir):
         if candidate.exists():
             return candidate

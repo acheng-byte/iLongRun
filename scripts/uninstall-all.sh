@@ -13,7 +13,7 @@ remove_path() {
     printf 'Removed %s\n' "$target"
   fi
 }
-for name in ilongrun ilongrun-coding ilongrun-prompt ilongrun-resume ilongrun-status ilongrun-doctor copilot-ilongrun; do
+for name in ilongrun ilongrun-coding ilongrun-model ilongrun-prompt ilongrun-resume ilongrun-status ilongrun-doctor copilot-ilongrun; do
   remove_path "$HOME/.local/bin/$name"
 done
 bash "$ROOT_DIR/scripts/uninstall-bare-commands.sh" || true

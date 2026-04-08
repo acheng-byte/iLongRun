@@ -1,7 +1,7 @@
 {
   "name": "ilongrun",
-  "description": "iLongRun turns GitHub Copilot CLI into a resumable planner-of-planners swarm kernel with canonical run recovery, configurable model policy, fleet wave dispatch, and final audit gates.",
-  "version": "0.4.0",
+  "description": "iLongRun turns GitHub Copilot CLI into a resumable planner-of-planners swarm kernel with coding-discipline gates, workspace isolation, claim verification, and final audit control.",
+  "version": "0.9.0",
   "author": {
     "name": "zscc.in",
     "url": "https://github.com/zscc"

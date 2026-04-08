@@ -31,7 +31,7 @@ def _metadata_lines(pairs: list[tuple[str, Any]]) -> list[str]:
 def build_final_review_template_markdown(
     *,
     run_id: str = "<run-id>",
-    audit_model: str = "gpt-5.4",
+    audit_model: str = "<audit-model>",
     implementation_model: str = "<selected-model>",
 ) -> str:
     lines = [
@@ -43,7 +43,7 @@ def build_final_review_template_markdown(
                 ("Run ID", run_id),
                 ("Audit model", audit_model),
                 ("Implementation model", implementation_model),
-                ("Review path", "reviews/gpt54-final-review.md"),
+                ("Review path", "reviews/final-review.md"),
             ]
         ),
         "",
@@ -99,7 +99,7 @@ def build_adjudication_report_markdown(
             [
                 ("Run ID", run_id),
                 ("Audit model", audit_model),
-                ("Review path", "reviews/gpt54-final-review.md"),
+                ("Review path", "reviews/final-review.md"),
                 ("Adjudication path", "reviews/adjudication.md"),
             ]
         ),
@@ -136,7 +136,7 @@ def build_adjudication_report_markdown(
     return "\n".join(lines)
 
 
-def build_completion_report_markdown(
+def build_terminal_report_markdown(
     *,
     run_id: str,
     status_name: str,
@@ -150,11 +150,14 @@ def build_completion_report_markdown(
     deliverables: list[str],
     verification_items: list[str],
     blockers: list[str],
+    report_path: str,
+    title: str,
+    verdict: str,
 ) -> str:
     score = completion_score or {}
     layers = score.get("layers") or {}
     lines = [
-        "# ILongRun Completion Summary",
+        f"# {title}",
         "",
         "## Run Metadata",
         *_metadata_lines(
@@ -163,7 +166,7 @@ def build_completion_report_markdown(
                 ("State", status_name),
                 ("Profile", profile),
                 ("Selected model", selected_model),
-                ("Completion path", "COMPLETION.md"),
+                ("Report path", report_path),
             ]
         ),
         "",
@@ -199,8 +202,110 @@ def build_completion_report_markdown(
             *_bullet_lines(blockers, none_text="None."),
             "",
             "## Verdict",
-            f"- {'COMPLETE' if str(status_name).strip().lower() == 'complete' else 'BLOCKED'}",
+            f"- {verdict}",
             "",
         ]
     )
     return "\n".join(lines)
+
+
+def build_completion_report_markdown(
+    *,
+    run_id: str,
+    status_name: str,
+    profile: str,
+    selected_model: str,
+    headline: str,
+    verification_state: str,
+    review_status: str,
+    adjudication_status: str,
+    completion_score: dict[str, Any] | None,
+    deliverables: list[str],
+    verification_items: list[str],
+    blockers: list[str],
+) -> str:
+    return build_terminal_report_markdown(
+        run_id=run_id,
+        status_name=status_name,
+        profile=profile,
+        selected_model=selected_model,
+        headline=headline,
+        verification_state=verification_state,
+        review_status=review_status,
+        adjudication_status=adjudication_status,
+        completion_score=completion_score,
+        deliverables=deliverables,
+        verification_items=verification_items,
+        blockers=blockers,
+        report_path="COMPLETION.md",
+        title="ILongRun Completion Summary",
+        verdict="COMPLETED",
+    )
+
+
+def build_blocked_report_markdown(
+    *,
+    run_id: str,
+    status_name: str,
+    profile: str,
+    selected_model: str,
+    headline: str,
+    verification_state: str,
+    review_status: str,
+    adjudication_status: str,
+    completion_score: dict[str, Any] | None,
+    deliverables: list[str],
+    verification_items: list[str],
+    blockers: list[str],
+) -> str:
+    return build_terminal_report_markdown(
+        run_id=run_id,
+        status_name=status_name,
+        profile=profile,
+        selected_model=selected_model,
+        headline=headline,
+        verification_state=verification_state,
+        review_status=review_status,
+        adjudication_status=adjudication_status,
+        completion_score=completion_score,
+        deliverables=deliverables,
+        verification_items=verification_items,
+        blockers=blockers,
+        report_path="BLOCKED.md",
+        title="ILongRun Blocked Summary",
+        verdict="BLOCKED",
+    )
+
+
+def build_failed_report_markdown(
+    *,
+    run_id: str,
+    status_name: str,
+    profile: str,
+    selected_model: str,
+    headline: str,
+    verification_state: str,
+    review_status: str,
+    adjudication_status: str,
+    completion_score: dict[str, Any] | None,
+    deliverables: list[str],
+    verification_items: list[str],
+    blockers: list[str],
+) -> str:
+    return build_terminal_report_markdown(
+        run_id=run_id,
+        status_name=status_name,
+        profile=profile,
+        selected_model=selected_model,
+        headline=headline,
+        verification_state=verification_state,
+        review_status=review_status,
+        adjudication_status=adjudication_status,
+        completion_score=completion_score,
+        deliverables=deliverables,
+        verification_items=verification_items,
+        blockers=blockers,
+        report_path="FAILED.md",
+        title="ILongRun Failure Summary",
+        verdict="FAILED",
+    )

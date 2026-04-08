@@ -88,6 +88,7 @@ copilot_home = Path(sys.argv[1])
 known_skill_names = {
     "ilongrun",
     "ilongrun-coding",
+    "ilongrun-model",
     "ilongrun-prompt",
     "ilongrun-resume",
     "ilongrun-status",
@@ -100,7 +101,10 @@ known_agent_names = {
     "ilongrun-executor.agent.md",
     "ilongrun-recovery.agent.md",
     "ilongrun-gpt54-audit-reviewer.agent.md",
+    "ilongrun-final-audit-reviewer.agent.md",
     "ilongrun-code-reviewer.agent.md",
+    "ilongrun-test-engineer.agent.md",
+    "ilongrun-security-auditor.agent.md",
 }
 content_markers = (
     "ilongrun",

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 ILONGRUN_HOME = Path(os.environ.get("ILONGRUN_HOME", str(Path.home() / ".copilot-ilongrun")))
+REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL_CONFIG = ILONGRUN_HOME / "config" / "model-policy.jsonc"
 DEFAULT_MODEL_AVAILABILITY = ILONGRUN_HOME / "config" / "model-availability.json"
 COPILOT_CONFIG_DIR = Path(os.environ.get("COPILOT_CONFIG_DIR", str(Path.home() / ".copilot")))
@@ -23,7 +24,20 @@ KNOWN_MODEL_DISPLAY = {
     "claude-haiku-4.5": "Claude Haiku 4.5",
     "gpt-5.4": "GPT-5.4",
     "gpt-5-mini": "GPT-5 mini",
-    "gemini-3.1-pro": "Gemini 3.1 Pro",
+}
+PRIMARY_MODEL_ROLE_NAMES = (
+    "mission-governor",
+    "strategy-synthesizer",
+    "phase-planner",
+    "workstream-planner",
+    "ledger-syncer",
+    "executor",
+    "recovery-agent",
+)
+FIXED_REVIEW_ROLE_MODELS = {
+    "code-reviewer": "gpt-5.4",
+    "test-engineer": "gpt-5.4",
+    "security-auditor": "gpt-5.4",
 }
 MODEL_ALIASES = {
     "claude opus 4.6": "claude-opus-4.6",
@@ -53,9 +67,6 @@ MODEL_ALIASES = {
     "gpt-5 mini": "gpt-5-mini",
     "gpt5mini": "gpt-5-mini",
     "gpt mini": "gpt-5-mini",
-    "gemini 3.1 pro": "gemini-3.1-pro",
-    "gemini-3.1-pro": "gemini-3.1-pro",
-    "gemini 3.1": "gemini-3.1-pro",
 }
 RATE_LIMIT_PATTERNS = [
     r"user_model_rate_limited",
@@ -201,6 +212,9 @@ def resolve_model_config_path(path: str | Path | None = None) -> Path:
             if modern.exists():
                 return modern
         return candidate
+    repo_default = REPO_ROOT / "config" / "model-policy.jsonc"
+    if repo_default.exists():
+        return repo_default
     modern_default = DEFAULT_MODEL_CONFIG
     if modern_default.exists():
         return modern_default
@@ -252,8 +266,11 @@ def default_model_config() -> dict[str, Any]:
             "workstream-planner": "claude-sonnet-4.6",
             "ledger-syncer": "claude-sonnet-4.6",
             "executor": "claude-opus-4.6",
+            "code-reviewer": "gpt-5.4",
+            "test-engineer": "gpt-5.4",
+            "security-auditor": "gpt-5.4",
             "recovery-agent": "claude-sonnet-4.6",
-            "gpt54-audit-reviewer": "gpt-5.4",
+            "final-audit-reviewer": "gpt-5.4",
         },
         "codingAuditModel": "gpt-5.4",
         "fallback": [
@@ -263,7 +280,6 @@ def default_model_config() -> dict[str, Any]:
             "gpt-5.4",
             "claude-haiku-4.5",
             "gpt-5-mini",
-            "gemini-3.1-pro",
         ],
         "backoffMinutes": [2, 5, 10],
         "availabilityTtlHours": 24,
@@ -379,6 +395,14 @@ def configured_default_model(config: dict[str, Any], *, command: str | None = No
     return None
 
 
+def primary_model_role_names() -> tuple[str, ...]:
+    return PRIMARY_MODEL_ROLE_NAMES
+
+
+def fixed_review_role_models() -> dict[str, str]:
+    return copy.deepcopy(FIXED_REVIEW_ROLE_MODELS)
+
+
 def normalize_model_name(value: str | None, config: dict[str, Any] | None = None) -> str | None:
     if not value:
         return None
@@ -420,7 +444,8 @@ def model_chain(
     role: str | None = None,
     availability: dict[str, dict[str, Any]] | None = None,
 ) -> list[str]:
-    detected = normalize_model_name(explicit_model, config)
+    explicit = normalize_model_name(explicit_model, config)
+    detected = explicit
     if not detected:
         detected = detect_model_from_text(prompt_text, config)
     base_fallback = list(dict.fromkeys(config.get("fallback", [])))
@@ -441,6 +466,8 @@ def model_chain(
             [item for item in seq if status_of(item) == "unavailable"],
         )
 
+    if explicit:
+        return [explicit]
     if detected:
         remainder = [item for item in base_chain if item != detected and status_of(item) != "unavailable"]
         unavailable = [item for item in base_chain if item != detected and status_of(item) == "unavailable"]

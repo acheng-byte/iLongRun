@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ILONGRUN_HOME="${ILONGRUN_HOME:-$HOME/.copilot-ilongrun}"
 HELPER_BIN_DIR="$ILONGRUN_HOME/bin"
 HELPER_CONFIG_DIR="$ILONGRUN_HOME/config"
+HELPER_VENDOR_DIR="$ILONGRUN_HOME/vendor"
 TARGET_SKILLS_DIR="$HOME/.copilot/skills"
 TARGET_AGENTS_DIR="$HOME/.copilot/agents"
 
@@ -38,8 +39,102 @@ install_copied_file() {
   cp "$source" "$target"
 }
 
+remove_path_if_exists() {
+  local target="$1"
+  if [ -L "$target" ] || [ -f "$target" ]; then
+    rm -f "$target"
+    printf 'Removed legacy path: %s\n' "$target"
+    return
+  fi
+  if [ -d "$target" ]; then
+    rm -rf "$target"
+    printf 'Removed legacy path: %s\n' "$target"
+  fi
+}
+
+migrate_model_policy() {
+  local source_template="$1"
+  local target_config="$2"
+  [ -f "$target_config" ] || return 0
+  python3 - "$ROOT_DIR/scripts" "$source_template" "$target_config" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+scripts_dir = Path(sys.argv[1])
+source_path = Path(sys.argv[2])
+target_path = Path(sys.argv[3])
+sys.path.insert(0, str(scripts_dir))
+
+from _ilongrun_shared import read_jsonc, write_text_atomic  # type: ignore
+
+DEPRECATED = "gemini-3.1-pro"
+FIXED_REVIEW_ROLES = ("code-reviewer", "test-engineer", "security-auditor")
+
+source = read_jsonc(source_path, {})
+target = read_jsonc(target_path, {})
+
+changed = False
+
+def sanitize_mapping(mapping, template=None):
+    global changed
+    result = dict(mapping or {})
+    for key, value in list(result.items()):
+        if value == DEPRECATED:
+            changed = True
+            replacement = (template or {}).get(key)
+            if replacement:
+                result[key] = replacement
+            else:
+                result.pop(key, None)
+    return result
+
+fallback = [item for item in (target.get("fallback") or []) if item != DEPRECATED]
+if fallback != list(target.get("fallback") or []):
+    target["fallback"] = fallback
+    changed = True
+
+display_names = dict(target.get("displayNames") or {})
+if display_names.pop(DEPRECATED, None) is not None:
+    target["displayNames"] = display_names
+    changed = True
+
+aliases = dict(target.get("aliases") or {})
+clean_aliases = {key: value for key, value in aliases.items() if value != DEPRECATED}
+if clean_aliases != aliases:
+    target["aliases"] = clean_aliases
+    changed = True
+
+for field in ("commandDefaults", "skillDefaults", "roleModels"):
+    cleaned = sanitize_mapping(target.get(field) or {}, source.get(field) or {})
+    if cleaned != (target.get(field) or {}):
+        target[field] = cleaned
+        changed = True
+
+if target.get("codingAuditModel") == DEPRECATED:
+    target["codingAuditModel"] = source.get("codingAuditModel") or "gpt-5.4"
+    changed = True
+
+role_models = dict(target.get("roleModels") or {})
+source_role_models = dict(source.get("roleModels") or {})
+for role in FIXED_REVIEW_ROLES:
+    desired = source_role_models.get(role)
+    if desired and role_models.get(role) != desired:
+        role_models[role] = desired
+        changed = True
+if role_models:
+    target["roleModels"] = role_models
+
+if changed:
+    write_text_atomic(target_path, json.dumps(target, ensure_ascii=False, indent=2))
+    print("migrated")
+else:
+    print("noop")
+PY
+}
+
 HELPER_REFS_DIR="$ILONGRUN_HOME/references"
-mkdir -p "$TARGET_SKILLS_DIR" "$TARGET_AGENTS_DIR" "$HELPER_BIN_DIR" "$HELPER_CONFIG_DIR" "$HELPER_REFS_DIR"
+mkdir -p "$TARGET_SKILLS_DIR" "$TARGET_AGENTS_DIR" "$HELPER_BIN_DIR" "$HELPER_CONFIG_DIR" "$HELPER_REFS_DIR" "$HELPER_VENDOR_DIR"
 
 find_bin_from_common_locations() {
   local name="$1"
@@ -107,6 +202,7 @@ EOF2
 
 for skill_dir in "$ROOT_DIR"/skills/*; do
   [ -d "$skill_dir" ] || continue
+  [ -f "$skill_dir/SKILL.md" ] || continue
   skill_name="$(basename "$skill_dir")"
   install_copied_dir "$skill_dir" "$TARGET_SKILLS_DIR/$skill_name"
   printf 'Installed skill: /%s\n' "$skill_name"
@@ -129,10 +225,13 @@ if [ -d "$ROOT_DIR/references" ]; then
 fi
 
 helpers=(
+  _ilongrun_delivery_audit.py
   _ilongrun_shared.py
   _ilongrun_lib.py
+  _ilongrun_report_templates.py
   _ilongrun_terminal_theme.py
   render_ilongrun_doctor_board.py
+  render_ilongrun_install_board.py
   cleanup_legacy_workspace.py
   notify_macos.py
   prepare_ilongrun_run.py
@@ -145,7 +244,10 @@ helpers=(
   finalize_ilongrun_run.py
   launch_ilongrun_supervisor.py
   selftest_ilongrun.py
+  lint_ilongrun_skills.py
+  sync_ilongrun_ledger.py
   model_policy_info.py
+  manage_ilongrun_model.py
   probe_models.py
   probe_fleet_capability.py
   hook_event.py
@@ -157,7 +259,26 @@ for helper in "${helpers[@]}"; do
   printf 'Installed helper: %s\n' "$HELPER_BIN_DIR/$helper"
 done
 
+shell_helpers=(
+  copilot-ilongrun
+  ilongrun
+  ilongrun-coding
+  ilongrun-model
+  ilongrun-prompt
+  ilongrun-resume
+  ilongrun-status
+  ilongrun-doctor
+)
+
+for helper in "${shell_helpers[@]}"; do
+  install_copied_file "$ROOT_DIR/scripts/$helper" "$HELPER_BIN_DIR/$helper"
+  chmod +x "$HELPER_BIN_DIR/$helper"
+  printf 'Installed helper launcher: %s\n' "$HELPER_BIN_DIR/$helper"
+done
+
 maybe_install_terminal_notifier
+
+remove_path_if_exists "$TARGET_SKILLS_DIR/ilongrun-model"
 
 if [ -f "$HELPER_CONFIG_DIR/model-policy.jsonc" ]; then
   printf 'Preserved existing model policy: %s\n' "$HELPER_CONFIG_DIR/model-policy.jsonc"
@@ -169,11 +290,21 @@ else
   install_copied_file "$ROOT_DIR/config/model-policy.jsonc" "$HELPER_CONFIG_DIR/model-policy.jsonc"
   printf 'Installed model policy: %s\n' "$HELPER_CONFIG_DIR/model-policy.jsonc"
 fi
+migration_result="$(migrate_model_policy "$ROOT_DIR/config/model-policy.jsonc" "$HELPER_CONFIG_DIR/model-policy.jsonc" || true)"
+if [ "$migration_result" = "migrated" ]; then
+  printf 'Sanitized deprecated model entries in: %s\n' "$HELPER_CONFIG_DIR/model-policy.jsonc"
+fi
 if [ ! -f "$HELPER_CONFIG_DIR/model-availability.json" ]; then
   install_copied_file "$ROOT_DIR/config/model-availability.json" "$HELPER_CONFIG_DIR/model-availability.json"
   printf 'Installed model availability seed: %s\n' "$HELPER_CONFIG_DIR/model-availability.json"
 else
   printf 'Preserved existing model availability cache: %s\n' "$HELPER_CONFIG_DIR/model-availability.json"
+fi
+install_copied_file "$ROOT_DIR/config/coding-protocol.jsonc" "$HELPER_CONFIG_DIR/coding-protocol.jsonc"
+printf 'Installed coding protocol: %s\n' "$HELPER_CONFIG_DIR/coding-protocol.jsonc"
+if [ -d "$ROOT_DIR/vendor/agent-skills" ]; then
+  install_copied_dir "$ROOT_DIR/vendor/agent-skills" "$HELPER_VENDOR_DIR/agent-skills"
+  printf 'Installed vendor snapshot: %s\n' "$HELPER_VENDOR_DIR/agent-skills"
 fi
 
 cat <<EOF2
@@ -190,9 +321,20 @@ Installed internal discipline skill:
   /ilongrun-coding
   （供 iLongRun 在 coding mission 中自动加载；终端用户入口是后续安装的 shell 命令 `ilongrun-coding`）
 
+Shell model picker:
+  ilongrun-model
+  （这是终端裸命令；不再作为 Copilot 会话内的 `/ilongrun-model` skill 暴露）
+  （TTY 交互式界面支持 Tab 页签：全局默认 / run模型 / coding模型）
+
 ILongRun helper bundle:
   $HELPER_BIN_DIR
 
 Model policy:
   $HELPER_CONFIG_DIR/model-policy.jsonc
+
+Coding protocol:
+  $HELPER_CONFIG_DIR/coding-protocol.jsonc
+
+Vendored agent-skills snapshot:
+  $HELPER_VENDOR_DIR/agent-skills
 EOF2

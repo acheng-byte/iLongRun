@@ -11,6 +11,7 @@ from _ilongrun_terminal_theme import ad_box, board_line, board_title, detail_lin
 EXPECTED_LAUNCHERS = [
     "ilongrun",
     "ilongrun-coding",
+    "ilongrun-model",
     "ilongrun-prompt",
     "ilongrun-resume",
     "ilongrun-status",
@@ -120,6 +121,22 @@ def summarize_selftest(rows: dict[str, dict[str, str]]) -> tuple[str, str]:
     return "warn", "⚠️ 有提醒"
 
 
+def summarize_workspace_run(rows: dict[str, dict[str, str]]) -> tuple[str, str]:
+    run_row = rows.get("workspace_run")
+    verify_row = rows.get("workspace_run_verification")
+    if not run_row:
+        return "skip", "⏭️ 当前工作区没有 .copilot-ilongrun 运行状态"
+    if run_row["status"] == "skip":
+        return "skip", f"⏭️ {run_row['value']}"
+    if not verify_row:
+        return "warn", "⚠️ 当前工作区 run 未完成健康检查"
+    if verify_row["status"] == "ok":
+        return "ok", f"✅ {verify_row['value']}"
+    if verify_row["status"] == "fail":
+        return "fail", f"❌ {verify_row['value']}"
+    return "warn", f"⚠️ {verify_row['value']}"
+
+
 def verdict(rows: dict[str, dict[str, str]], model_payload: dict) -> tuple[str, str]:
     statuses = [row["status"] for row in rows.values()]
     has_fail = "fail" in statuses
@@ -166,6 +183,15 @@ def next_steps(rows: dict[str, dict[str, str]], model_payload: dict, refresh_cac
     if rows.get("selftest", {}).get("status") == "fail":
         log_path = rows.get("selftest_log", {}).get("value") or str(selftest_log)
         steps.append(f"自检脚本未通过，可先查看完整日志：{log_path}")
+    if any(rows.get(key, {}).get("status") == "fail" for key in ("coding_protocol", "vendor_snapshot", "coding_playbooks", "coding_agents")):
+        steps.append("coding protocol bundle 不完整，建议重新执行一键安装脚本补齐 skill playbooks / agents / vendor 快照。")
+    if rows.get("legacy_skill.ilongrun-model", {}).get("status") == "warn":
+        steps.append("检测到旧 `/ilongrun-model` 会话 skill 残留，建议重跑安装脚本，或手动删除 `~/.copilot/skills/ilongrun-model`。")
+    if rows.get("workspace_run_verification", {}).get("status") == "fail":
+        action = rows.get("workspace_run_action", {}).get("value") or "先用 `ilongrun-status latest` 查看当前 run，再处理 drift / gate 问题。"
+        steps.append(f"当前工作区 run 账本存在问题：{action}")
+    if rows.get("workspace_run_pollution", {}).get("status") == "fail":
+        steps.append("当前工作区 git 跟踪了生成态目录，建议先清理 `.copilot-ilongrun/`、`node_modules/`、`dist/` 等再继续。")
     models = model_payload.get("models") or {}
     unavailable = [item.get("displayName") or key for key, item in models.items() if item.get("status") == "unavailable"]
     if unavailable:
@@ -197,6 +223,7 @@ def main() -> int:
     model_tone, model_line = model_summary(model_payload, bool(args.refresh_cache))
     selftest_tone, selftest_line = summarize_selftest(rows)
     fleet_tone, fleet_line = fleet_summary(fleet_payload)
+    _, workspace_line = summarize_workspace_run(rows)
 
     login_row = rows.get("login", {"status": "fail", "value": "未登录 GitHub Copilot"})
     copilot_row = rows.get("copilot", {"status": "fail", "value": "未检测到 copilot CLI"})
@@ -210,6 +237,7 @@ def main() -> int:
     print(board_line("🧠 模型缓存", model_line))
     print(board_line("🧪 自检脚本", selftest_line))
     print(board_line("🚢 /fleet 能力", fleet_line))
+    print(board_line("🗂️ 当前 run", workspace_line))
     if args.notify_test:
         notify_row = rows.get("notify_test", {"status": "warn", "value": "未执行"})
         print(board_line("🔔 提醒测试", f"{status_icon(notify_row['status'])} {notify_row['value']}"))
@@ -224,10 +252,19 @@ def main() -> int:
     print(detail_line("Copilot CLI", f"{status_icon(copilot_row['status'])} {copilot_row['value']}"))
     print(detail_line("登录账号", f"{status_icon(login_row['status'])} {login_row['value']}"))
     print(detail_line("模型配置", f"{status_icon(policy_row['status'])} {policy_row['value']}"))
+    protocol_row = rows.get("coding_protocol")
+    if protocol_row:
+        print(detail_line("Coding 协议", f"{status_icon(protocol_row['status'])} {protocol_row['value']}"))
+    vendor_row = rows.get("vendor_snapshot")
+    if vendor_row:
+        print(detail_line("Vendor 快照", f"{status_icon(vendor_row['status'])} {vendor_row['value']}"))
 
     legacy_row = rows.get("legacy_plugin")
     if legacy_row:
         print(detail_line("旧插件", f"{status_icon(legacy_row['status'])} {legacy_row['value']}"))
+    legacy_skill_row = rows.get("legacy_skill.ilongrun-model")
+    if legacy_skill_row:
+        print(detail_line("旧会话入口", f"{status_icon(legacy_skill_row['status'])} {legacy_skill_row['value']}"))
     workspace_row = rows.get("workspace_legacy")
     if workspace_row:
         print(detail_line("工作区旧状态", f"{status_icon(workspace_row['status'])} {workspace_row['value']}"))
@@ -244,6 +281,40 @@ def main() -> int:
     if missing_launchers:
         print(detail_line("缺失命令", ", ".join(missing_launchers)))
     print("")
+
+    playbooks_row = rows.get("coding_playbooks")
+    agents_row = rows.get("coding_agents")
+    if playbooks_row or agents_row:
+        print(section_heading("🧬 Coding Protocol Bundle"))
+        print(section_rule())
+        if playbooks_row:
+            print(detail_line("Skill Playbooks", f"{status_icon(playbooks_row['status'])} {playbooks_row['value']}"))
+        if agents_row:
+            print(detail_line("专项 Agents", f"{status_icon(agents_row['status'])} {agents_row['value']}"))
+        print("")
+
+    workspace_run_row = rows.get("workspace_run")
+    if workspace_run_row and workspace_run_row["status"] != "skip":
+        print(section_heading("🗂️ 当前工作区 Run 健康"))
+        print(section_rule())
+        print(detail_line("检查目标", workspace_run_row["value"]))
+        verify_row = rows.get("workspace_run_verification")
+        if verify_row:
+            print(detail_line("账本校验", f"{status_icon(verify_row['status'])} {verify_row['value']}"))
+        for key, label in (
+            ("workspace_run_state_conflict", "状态真值"),
+            ("workspace_run_active_pointer", "Active 指针"),
+            ("workspace_run_finalize", "Finalize 产物"),
+            ("workspace_run_review_placeholder", "Review 证据"),
+            ("workspace_run_pollution", "工作区污染"),
+        ):
+            row = rows.get(key)
+            if row:
+                print(detail_line(label, f"{status_icon(row['status'])} {row['value']}"))
+        action_row = rows.get("workspace_run_action")
+        if action_row:
+            print(detail_line("建议动作", action_row["value"]))
+        print("")
 
     print(section_heading("🧠 模型缓存刷新结果" if args.refresh_cache else "🧠 模型缓存概览"))
     print(section_rule())

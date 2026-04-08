@@ -5,7 +5,7 @@ infer: true
 tools: ["view", "glob", "grep", "bash", "edit", "create", "task"]
 ---
 
-输出必须落到：`reviews/gpt54-final-review.md`
+输出必须落到：`reviews/final-review.md`
 
 ## 审查流程
 
@@ -36,7 +36,7 @@ tools: ["view", "glob", "grep", "bash", "edit", "create", "task"]
 - Run ID: `<run-id>`
 - Audit model: `<codingAuditModel>`
 - Implementation model: `<selected-model>`
-- Review path: `reviews/gpt54-final-review.md`
+- Review path: `reviews/final-review.md`
 
 ## Summary
 - 审查范围、总发现数、严重性分布

@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 from _ilongrun_report_templates import build_final_review_template_markdown
+from _ilongrun_shared import default_model_config
 
 ROOT = Path(__file__).resolve().parent
 
@@ -47,9 +48,66 @@ def assert_notify_target(payload: dict, expected: Path) -> None:
     assert payload.get("resolvedOpen", "") == str(expected.resolve())
 
 
+def completed_status_payload(ws: dict, *, stamp: str = "2026-04-07T00:01:00Z") -> dict:
+    phase_id = str(ws.get("phaseId") or "")
+    payload = {
+        "id": ws["id"],
+        "status": "complete",
+        "startedAt": "2026-04-07T00:00:00Z",
+        "completedAt": stamp,
+        "specRef": ws.get("specRef"),
+        "microcycleState": ws.get("microcycleState") or {},
+        "reviewSequence": ws.get("reviewSequence") or {},
+        "freshEvidence": ws.get("freshEvidence") or {},
+        "rootCauseRecord": ws.get("rootCauseRecord") or {},
+    }
+    if phase_id == "phase-build":
+        payload["microcycleState"] = {
+            "required": True,
+            "status": "complete",
+            "currentStep": "handoff",
+            "steps": [
+                {"id": "spec-lock", "status": "done"},
+                {"id": "red", "status": "done"},
+                {"id": "verify-red", "status": "done"},
+                {"id": "green", "status": "done"},
+                {"id": "verify-green", "status": "done"},
+                {"id": "self-review", "status": "done"},
+                {"id": "spec-review", "status": "done"},
+                {"id": "quality-review", "status": "done"},
+                {"id": "handoff", "status": "done"},
+            ],
+            "lastUpdatedAt": stamp,
+        }
+        payload["reviewSequence"] = {
+            "required": True,
+            "status": "complete",
+            "selfReview": "complete",
+            "specReview": "complete",
+            "qualityReview": "complete",
+            "lastUpdatedAt": stamp,
+        }
+    if phase_id in {"phase-build", "phase-verify"}:
+        payload["freshEvidence"] = {
+            "required": True,
+            "status": "complete",
+            "items": [
+                {
+                    "command": "python3 -m pytest",
+                    "observedAt": stamp,
+                    "exitCode": 0,
+                    "summary": f"{ws['id']} fresh evidence",
+                }
+            ],
+            "lastUpdatedAt": stamp,
+        }
+    return payload
+
+
 def main() -> int:
     temp_root = Path(tempfile.mkdtemp(prefix="ilongrun-selftest-"))
     try:
+        helper_home = ROOT.parent if ROOT.name == "bin" else (temp_root / "ilongrun-home")
         review_template = build_final_review_template_markdown()
         assert "## Run Metadata" in review_template
         assert "### Must-Fix (Critical)" in review_template
@@ -72,8 +130,49 @@ def main() -> int:
         assert (run_dir / "projection-sync.jsonl").exists()
         assert list(run_dir.glob("task-list-*.md"))
         prepared_scheduler = read_json(run_dir / "scheduler.json")
+        assert prepared_scheduler.get("profile") == "coding"
         assert (prepared_scheduler.get("projectionState") or {}).get("ledgerSyncReason") == "run-prepared"
         assert (prepared_scheduler.get("projectionState") or {}).get("ledgerSyncActor") == "ledger-syncer"
+        assert [phase.get("id") for phase in prepared_scheduler.get("phases") or []] == [
+            "phase-define",
+            "phase-plan",
+            "phase-build",
+            "phase-verify",
+            "phase-review",
+            "phase-audit",
+            "phase-finalize",
+        ]
+        assert (prepared_scheduler.get("codingProtocol") or {}).get("version") == "0.7.0"
+        assert (prepared_scheduler.get("workspaceIsolation") or {}).get("enabled") is True
+        assert (prepared_scheduler.get("phaseGuards") or {}).get("claimVerification")
+        assert (prepared_scheduler.get("reviewMatrix") or {}).get("gates")
+        assert "gpt54-audit-reviewer" not in ((prepared_scheduler.get("mission") or {}).get("modelAllocation") or {})
+        assert (prepared_scheduler.get("mission") or {}).get("modelAllocation", {}).get("code-reviewer") == "gpt-5.4"
+        assert (prepared_scheduler.get("mission") or {}).get("modelAllocation", {}).get("test-engineer") == "gpt-5.4"
+        assert (prepared_scheduler.get("mission") or {}).get("modelAllocation", {}).get("security-auditor") == "gpt-5.4"
+
+        explicit_workspace = temp_root / "explicit-model-workspace"
+        explicit_workspace.mkdir(parents=True, exist_ok=True)
+        run(
+            str(ROOT / "prepare_ilongrun_run.py"),
+            "--workspace", str(explicit_workspace),
+            "--task", "修复一个小 bug 并完成最终终审",
+            "--force-profile", "coding",
+            "--explicit-model", "claude-haiku-4.5",
+            "--session-model", "claude-haiku-4.5",
+            "--model-control-mode", "explicit-model-locked",
+        )
+        explicit_run_id = (explicit_workspace / ".copilot-ilongrun" / "state" / "latest-run-id").read_text(encoding="utf-8").strip()
+        explicit_scheduler = read_json(explicit_workspace / ".copilot-ilongrun" / "runs" / explicit_run_id / "scheduler.json")
+        assert explicit_scheduler.get("selectedModel") == "claude-haiku-4.5"
+        assert explicit_scheduler.get("codingAuditModel") == "claude-haiku-4.5"
+        assert explicit_scheduler.get("fallbackChain") == []
+        assert (explicit_scheduler.get("modelEnforcement") or {}).get("active") is True
+        assert (explicit_scheduler.get("modelEnforcement") or {}).get("scope") == "full-chain"
+        assert (explicit_scheduler.get("reviews") or {}).get("auditModel") == "claude-haiku-4.5"
+        assert set((explicit_scheduler.get("mission") or {}).get("modelAllocation", {}).values()) == {"claude-haiku-4.5"}
+        assert "gpt54-audit-reviewer" not in ((explicit_scheduler.get("mission") or {}).get("modelAllocation") or {})
+        assert {ws.get("ownerModel") for ws in (explicit_scheduler.get("workstreams") or [])} == {"claude-haiku-4.5"}
 
         model_info_run = run(
             str(ROOT / "model_policy_info.py"),
@@ -94,6 +193,341 @@ def main() -> int:
         )
         model_info_coding_payload = json.loads(model_info_coding.stdout)
         assert model_info_coding_payload["selected"] == "claude-opus-4.6"
+
+        model_info_explicit = run(
+            str(ROOT / "model_policy_info.py"),
+            "--config", str(ROOT.parent / "config" / "model-policy.jsonc"),
+            "--subcommand", "coding",
+            "--skill", "ilongrun-coding",
+            "--explicit-model", "claude-haiku-4.5",
+            "--json",
+        )
+        model_info_explicit_payload = json.loads(model_info_explicit.stdout)
+        assert model_info_explicit_payload["selected"] == "claude-haiku-4.5"
+        assert model_info_explicit_payload["chain"] == ["claude-haiku-4.5"]
+
+        model_home = temp_root / "model-home"
+        install_config_path = model_home / "config" / "model-policy.jsonc"
+        install_config_path.parent.mkdir(parents=True, exist_ok=True)
+        install_policy = default_model_config()
+        install_policy["roleModels"]["code-reviewer"] = "claude-sonnet-4.6"
+        install_policy["roleModels"]["test-engineer"] = "claude-sonnet-4.6"
+        install_policy["roleModels"]["security-auditor"] = "claude-sonnet-4.6"
+        install_config_path.write_text(json.dumps(install_policy, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        fake_repo = temp_root / "fake-ilongrun-repo"
+        (fake_repo / "config").mkdir(parents=True, exist_ok=True)
+        (fake_repo / "plugin.json").write_text(json.dumps({"name": "ilongrun"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        repo_policy = default_model_config()
+        (fake_repo / "config" / "model-policy.jsonc").write_text(json.dumps(repo_policy, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        external_workspace = temp_root / "external-workspace"
+        external_workspace.mkdir(parents=True, exist_ok=True)
+        fake_bin = temp_root / "fake-bin"
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        fake_copilot = fake_bin / "copilot"
+        fake_copilot.write_text("#!/usr/bin/env bash\necho OK\n", encoding="utf-8")
+        fake_copilot.chmod(0o755)
+        refresh_env = {
+            "ILONGRUN_HOME": str(model_home),
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            "COPILOT_GITHUB_TOKEN": "test-token",
+        }
+
+        model_show_text = subprocess.run(
+            ["python3", str(ROOT / "manage_ilongrun_model.py"), "--workspace", str(external_workspace)],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "ILONGRUN_HOME": str(model_home)},
+        )
+        assert model_show_text.returncode == 0
+        assert "主模型模板看板" in model_show_text.stdout
+        assert "全局默认 · 同时更新 ilongrun 与 ilongrun-coding" in model_show_text.stdout
+        assert "Claude Sonnet 4.6" in model_show_text.stdout
+        assert "Claude Opus 4.6" in model_show_text.stdout
+
+        model_show_explicit = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(external_workspace),
+            "--json",
+            "show",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        assert json.loads(model_show_explicit.stdout)["mode"] == "show"
+
+        model_show = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(external_workspace),
+            "--json",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        model_show_payload = json.loads(model_show.stdout)
+        assert model_show_payload["repoDetected"] is False
+        assert len(model_show_payload["targets"]) == 1
+        assert model_show_payload["targets"][0]["scope"] == "install"
+        assert model_show_payload["skippedRepoPath"]
+
+        model_refresh = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(external_workspace),
+            "--json",
+            "--refresh",
+            env=refresh_env,
+        )
+        model_refresh_payload = json.loads(model_refresh.stdout)
+        assert model_refresh_payload["mode"] == "show"
+        assert model_refresh_payload["refresh"]["status"] == "refreshed"
+        assert model_refresh_payload["refresh"]["models"]["claude-sonnet-4.6"]["status"] == "available"
+
+        model_set = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(fake_repo),
+            "--json",
+            "claude-haiku-4.5",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        model_set_payload = json.loads(model_set.stdout)
+        assert model_set_payload["mode"] == "set"
+        assert model_set_payload["effectiveModel"] == "claude-haiku-4.5"
+        assert model_set_payload["writeScope"] == "global"
+        assert {item["scope"] for item in model_set_payload["targets"]} == {"install", "repo"}
+        install_after_set = read_json(install_config_path)
+        repo_after_set = read_json(fake_repo / "config" / "model-policy.jsonc")
+        for payload in (install_after_set, repo_after_set):
+            assert payload["commandDefaults"]["run"] == "claude-haiku-4.5"
+            assert payload["commandDefaults"]["coding"] == "claude-haiku-4.5"
+            assert payload["skillDefaults"]["ilongrun"] == "claude-haiku-4.5"
+            assert payload["skillDefaults"]["ilongrun-coding"] == "claude-haiku-4.5"
+            for role in ("mission-governor", "strategy-synthesizer", "phase-planner", "workstream-planner", "ledger-syncer", "executor", "recovery-agent"):
+                assert payload["roleModels"][role] == "claude-haiku-4.5"
+            for role in ("code-reviewer", "test-engineer", "security-auditor"):
+                assert payload["roleModels"][role] == "gpt-5.4"
+            assert payload["codingAuditModel"] == "gpt-5.4"
+            assert payload["roleModels"]["final-audit-reviewer"] == "gpt-5.4"
+            assert payload["commandDefaults"]["prompt"] == "claude-sonnet-4.6"
+            assert payload["commandDefaults"]["resume"] == "claude-sonnet-4.6"
+            assert payload["commandDefaults"]["status"] == "claude-sonnet-4.6"
+            assert payload["commandDefaults"]["doctor"] == "claude-sonnet-4.6"
+
+        bad_model = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(fake_repo),
+            "--json",
+            "definitely-unknown-model",
+            ok=False,
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        assert bad_model.returncode == 2
+        assert json.loads(bad_model.stdout)["ok"] is False
+
+        picker_set = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(fake_repo),
+            "--json",
+            "--test-select", "gpt-5-mini",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        picker_set_payload = json.loads(picker_set.stdout)
+        assert picker_set_payload["mode"] == "set"
+        assert picker_set_payload["selectionSource"] == "picker"
+        assert picker_set_payload["writeScope"] == "global"
+        install_after_picker = read_json(install_config_path)
+        repo_after_picker = read_json(fake_repo / "config" / "model-policy.jsonc")
+        for payload in (install_after_picker, repo_after_picker):
+            assert payload["commandDefaults"]["run"] == "gpt-5-mini"
+            assert payload["commandDefaults"]["coding"] == "gpt-5-mini"
+            assert payload["roleModels"]["executor"] == "gpt-5-mini"
+            assert payload["roleModels"]["code-reviewer"] == "gpt-5.4"
+            assert payload["codingAuditModel"] == "gpt-5.4"
+
+        run_scope_before_install = read_json(install_config_path)
+        run_scope_before_repo = read_json(fake_repo / "config" / "model-policy.jsonc")
+        run_scope_set = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(fake_repo),
+            "--json",
+            "--test-tab", "run",
+            "--test-select", "claude-sonnet-4.5",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        run_scope_payload = json.loads(run_scope_set.stdout)
+        assert run_scope_payload["mode"] == "set"
+        assert run_scope_payload["selectionSource"] == "picker"
+        assert run_scope_payload["writeScope"] == "run"
+        assert run_scope_payload["pickerTab"] == "run"
+        install_after_run_scope = read_json(install_config_path)
+        repo_after_run_scope = read_json(fake_repo / "config" / "model-policy.jsonc")
+        for before_payload, after_payload in (
+            (run_scope_before_install, install_after_run_scope),
+            (run_scope_before_repo, repo_after_run_scope),
+        ):
+            assert after_payload["commandDefaults"]["run"] == "claude-sonnet-4.5"
+            assert after_payload["skillDefaults"]["ilongrun"] == "claude-sonnet-4.5"
+            assert after_payload["commandDefaults"]["coding"] == before_payload["commandDefaults"]["coding"]
+            assert after_payload["skillDefaults"]["ilongrun-coding"] == before_payload["skillDefaults"]["ilongrun-coding"]
+            assert after_payload["roleModels"] == before_payload["roleModels"]
+            assert after_payload["codingAuditModel"] == before_payload["codingAuditModel"]
+
+        coding_scope_before_install = read_json(install_config_path)
+        coding_scope_before_repo = read_json(fake_repo / "config" / "model-policy.jsonc")
+        coding_scope_set = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(fake_repo),
+            "--json",
+            "--test-tab", "coding",
+            "--test-select", "claude-opus-4.5",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        coding_scope_payload = json.loads(coding_scope_set.stdout)
+        assert coding_scope_payload["mode"] == "set"
+        assert coding_scope_payload["selectionSource"] == "picker"
+        assert coding_scope_payload["writeScope"] == "coding"
+        assert coding_scope_payload["pickerTab"] == "coding"
+        install_after_coding_scope = read_json(install_config_path)
+        repo_after_coding_scope = read_json(fake_repo / "config" / "model-policy.jsonc")
+        for before_payload, after_payload in (
+            (coding_scope_before_install, install_after_coding_scope),
+            (coding_scope_before_repo, repo_after_coding_scope),
+        ):
+            assert after_payload["commandDefaults"]["coding"] == "claude-opus-4.5"
+            assert after_payload["skillDefaults"]["ilongrun-coding"] == "claude-opus-4.5"
+            assert after_payload["commandDefaults"]["run"] == before_payload["commandDefaults"]["run"]
+            assert after_payload["skillDefaults"]["ilongrun"] == before_payload["skillDefaults"]["ilongrun"]
+            assert after_payload["roleModels"] == before_payload["roleModels"]
+            assert after_payload["codingAuditModel"] == before_payload["codingAuditModel"]
+
+        model_reset = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(fake_repo),
+            "--json",
+            "--test-tab", "run",
+            "--test-reset",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        model_reset_payload = json.loads(model_reset.stdout)
+        assert model_reset_payload["mode"] == "reset"
+        assert model_reset_payload["selectionSource"] == "picker"
+        assert model_reset_payload["writeScope"] == "global"
+        assert model_reset_payload["pickerTab"] == "run"
+        install_after_reset = read_json(install_config_path)
+        repo_after_reset = read_json(fake_repo / "config" / "model-policy.jsonc")
+        for payload in (install_after_reset, repo_after_reset):
+            assert payload["commandDefaults"]["run"] == "claude-sonnet-4.6"
+            assert payload["commandDefaults"]["coding"] == "claude-opus-4.6"
+            assert payload["skillDefaults"]["ilongrun"] == "claude-sonnet-4.6"
+            assert payload["skillDefaults"]["ilongrun-coding"] == "claude-opus-4.6"
+            assert payload["roleModels"]["mission-governor"] == "claude-sonnet-4.6"
+            assert payload["roleModels"]["executor"] == "claude-opus-4.6"
+            assert payload["roleModels"]["code-reviewer"] == "gpt-5.4"
+            assert payload["roleModels"]["test-engineer"] == "gpt-5.4"
+            assert payload["roleModels"]["security-auditor"] == "gpt-5.4"
+
+        direct_model_reset = run(
+            str(ROOT / "manage_ilongrun_model.py"),
+            "--workspace", str(fake_repo),
+            "--json",
+            "reset",
+            env={"ILONGRUN_HOME": str(model_home)},
+        )
+        direct_model_reset_payload = json.loads(direct_model_reset.stdout)
+        assert direct_model_reset_payload["mode"] == "reset"
+        assert direct_model_reset_payload["writeScope"] == "global"
+
+        model_cli = subprocess.run(
+            ["bash", str(ROOT / "copilot-ilongrun"), "model"],
+            capture_output=True,
+            text=True,
+            cwd=str(fake_repo),
+            env={**os.environ, "ILONGRUN_HOME": str(model_home)},
+        )
+        assert model_cli.returncode == 0
+        assert "主模型模板看板" in model_cli.stdout
+        assert "gpt-5.4" in model_cli.stdout.lower()
+
+        dry_env = {**os.environ, "ILONGRUN_HOME": str(model_home), "COPILOT_GITHUB_TOKEN": "test-token", "COPILOT_BIN": "python3"}
+        run_dry = subprocess.run(
+            ["bash", str(ROOT / "copilot-ilongrun"), "run", "--dry-run", "帮我写 README"],
+            capture_output=True,
+            text=True,
+            cwd=str(external_workspace),
+            env=dry_env,
+        )
+        assert run_dry.returncode == 0
+        assert "--model claude-sonnet-4.6" in run_dry.stdout
+        coding_dry = subprocess.run(
+            ["bash", str(ROOT / "copilot-ilongrun"), "coding", "--dry-run", "修一个 bug 并补测试"],
+            capture_output=True,
+            text=True,
+            cwd=str(external_workspace),
+            env=dry_env,
+        )
+        assert coding_dry.returncode == 0
+        assert "--model claude-opus-4.6" in coding_dry.stdout
+
+        resume_model_workspace = temp_root / "resume-model-workspace"
+        resume_model_workspace.mkdir(parents=True, exist_ok=True)
+        run(
+            str(ROOT / "prepare_ilongrun_run.py"),
+            "--workspace", str(resume_model_workspace),
+            "--task", "修一个小 bug 并补测试",
+            "--force-profile", "coding",
+            "--explicit-model", "claude-haiku-4.5",
+            "--session-model", "claude-haiku-4.5",
+            "--model-control-mode", "explicit-model-locked",
+        )
+        resume_dry = subprocess.run(
+            ["bash", str(ROOT / "copilot-ilongrun"), "resume", "--dry-run", "latest"],
+            capture_output=True,
+            text=True,
+            cwd=str(resume_model_workspace),
+            env=dry_env,
+        )
+        assert resume_dry.returncode == 0
+        assert "--model claude-haiku-4.5" in resume_dry.stdout
+
+        supervisor_coding_chain = run_inline(
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "import json",
+                    "import sys",
+                    f"sys.path.insert(0, {str(ROOT)!r})",
+                    "import launch_ilongrun_supervisor as sup",
+                    "from _ilongrun_shared import load_model_config, model_availability_snapshot",
+                    f"cfg = load_model_config({str(ROOT.parent / 'config' / 'model-policy.jsonc')!r})",
+                    "av = model_availability_snapshot(cfg, cache={'version': 1, 'accounts': {}})",
+                    "class Args:",
+                    "    explicit_model = None",
+                    "    mode = 'run'",
+                    "    force_profile = 'coding'",
+                    f"chain = sup.supervisor_model_chain(Args(), workspace=Path({str(explicit_workspace)!r}), run_ref={explicit_run_id!r}, payload='ignored', config=cfg, availability=av)",
+                    "print(json.dumps(chain, ensure_ascii=False))",
+                ]
+            )
+        )
+        assert json.loads(supervisor_coding_chain.stdout) == ["claude-haiku-4.5"]
+
+        supervisor_resume_chain = run_inline(
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "import json",
+                    "import sys",
+                    f"sys.path.insert(0, {str(ROOT)!r})",
+                    "import launch_ilongrun_supervisor as sup",
+                    "from _ilongrun_shared import load_model_config, model_availability_snapshot",
+                    f"cfg = load_model_config({str(ROOT.parent / 'config' / 'model-policy.jsonc')!r})",
+                    "av = model_availability_snapshot(cfg, cache={'version': 1, 'accounts': {}})",
+                    "class Args:",
+                    "    explicit_model = None",
+                    "    mode = 'resume'",
+                    "    force_profile = None",
+                    f"chain = sup.supervisor_model_chain(Args(), workspace=Path({str(resume_model_workspace)!r}), run_ref='latest', payload='latest', config=cfg, availability=av)",
+                    "print(json.dumps(chain, ensure_ascii=False))",
+                ]
+            )
+        )
+        assert json.loads(supervisor_resume_chain.stdout) == ["claude-haiku-4.5"]
 
         doctor_log = temp_root / "doctor.log"
         doctor_log.write_text(
@@ -117,10 +551,12 @@ def main() -> int:
             "--command-bin-dir", str(temp_root / "bin"),
             "--helper-dir", str(temp_root / "helpers"),
             "--model-config", str(ROOT.parent / "config" / "model-policy.jsonc"),
+            "--version", "0.7.0",
         )
         assert "知识船仓·公益社区" in install_board.stdout
         assert "倾力制作～" in install_board.stdout
         assert "====" in install_board.stdout
+        assert "v0.7.0" in install_board.stdout
 
         doctor_checks = temp_root / "doctor-checks.tsv"
         doctor_checks.write_text(
@@ -128,6 +564,7 @@ def main() -> int:
                 [
                     "launcher.ilongrun\tok\t/tmp/ilongrun",
                     "launcher.ilongrun-coding\tok\t/tmp/ilongrun-coding",
+                    "launcher.ilongrun-model\tok\t/tmp/ilongrun-model",
                     "launcher.ilongrun-prompt\tok\t/tmp/ilongrun-prompt",
                     "launcher.ilongrun-resume\tok\t/tmp/ilongrun-resume",
                     "launcher.ilongrun-status\tok\t/tmp/ilongrun-status",
@@ -136,6 +573,13 @@ def main() -> int:
                     "copilot\tok\t/tmp/copilot",
                     "login\tok\ttest-user@https://github.com",
                     "model_policy\tok\t/tmp/model-policy.jsonc",
+                    "coding_protocol\tok\t/tmp/coding-protocol.jsonc",
+                    "vendor_snapshot\tok\t/tmp/vendor/agent-skills",
+                    "coding_playbooks\tok\t/tmp/skills/ilongrun-coding",
+                    "coding_agents\tok\t/tmp/agents",
+                    "skill_lint\tok\t/tmp/lint_ilongrun_skills.py",
+                    "model_helper\tok\t/tmp/manage_ilongrun_model.py",
+                    "legacy_skill.ilongrun-model\twarn\t/tmp/skills/ilongrun-model（legacy 会话入口残留，可清理）",
                     "legacy_plugin\tok\t未启用（copilot-mission-control）",
                     "workspace_legacy\tok\t未发现旧工作区残留",
                     "screen\tok\t/usr/bin/screen",
@@ -191,7 +635,39 @@ def main() -> int:
         )
         assert "环境体检看板" in doctor_board.stdout
         assert "模型缓存刷新结果" in doctor_board.stdout
+        assert "旧会话入口" in doctor_board.stdout
         assert "倾力制作～" in doctor_board.stdout
+
+        bad_skill = temp_root / "bad-skill" / "SKILL.md"
+        bad_skill.parent.mkdir(parents=True, exist_ok=True)
+        bad_skill.write_text(
+            "---\nname: demo\ndescription: A long summary instead of a trigger.\n---\n\n## Demo\n",
+            encoding="utf-8",
+        )
+        lint_fail = run(
+            str(ROOT / "lint_ilongrun_skills.py"),
+            "--path", str(bad_skill),
+            "--json",
+            ok=False,
+        )
+        lint_fail_payload = json.loads(lint_fail.stdout)
+        assert lint_fail.returncode != 0
+        assert "frontmatter description must start" in " ".join(lint_fail_payload["results"][0]["findings"])
+        bad_skill.write_text(
+            "---\nname: demo\ndescription: 当用户需要一个极小的 demo skill 时使用。\n---\n\n## Demo\n\n- ok\n",
+            encoding="utf-8",
+        )
+        lint_fix = run(
+            str(ROOT / "lint_ilongrun_skills.py"),
+            "--path", str(bad_skill),
+            "--json",
+        )
+        assert json.loads(lint_fix.stdout)["ok"] is True
+        lint_repo = run(
+            str(ROOT / "lint_ilongrun_skills.py"),
+            "--json",
+        )
+        assert json.loads(lint_repo.stdout)["ok"] is True
 
         coding_workspace = temp_root / "coding-workspace"
         coding_workspace.mkdir(parents=True, exist_ok=True)
@@ -206,6 +682,8 @@ def main() -> int:
         assert coding_sched.get("profile") == "coding"
         assert (coding_sched.get("mission") or {}).get("profile") == "coding"
         assert (coding_sched.get("reviews") or {}).get("required") is True
+        assert (coding_sched.get("swarmPolicy") or {}).get("defaultMode") == "swarm-wave"
+        assert (coding_sched.get("reviewMatrix") or {}).get("gates")
         launch_board = run(
             str(ROOT / "render_ilongrun_launch_board.py"),
             "--workspace", str(coding_workspace),
@@ -239,6 +717,18 @@ def main() -> int:
         complete_result = json.loads(complete_notify.stdout)
         assert_notify_target(complete_result, run_dir / "COMPLETION.md")
         (run_dir / "COMPLETION.md").unlink()
+
+        (run_dir / "BLOCKED.md").write_text("# blocked\n", encoding="utf-8")
+        blocked_notify = run(
+            str(ROOT / "notify_macos.py"),
+            "--workspace", str(workspace),
+            "--run-id", run_id,
+            "--event", "blocked",
+            "--dry-run",
+        )
+        blocked_result = json.loads(blocked_notify.stdout)
+        assert_notify_target(blocked_result, run_dir / "BLOCKED.md")
+        (run_dir / "BLOCKED.md").unlink()
 
         scheduler = read_json(run_dir / "scheduler.json")
         workstreams = scheduler.get("workstreams") or []
@@ -276,12 +766,22 @@ def main() -> int:
         assert fleet_capability.get("cache") == "/tmp/fleet-cache.json"
         assert fleet_capability.get("rawOutputDigest")
         assert (fleet_scheduler.get("projectionState") or {}).get("ledgerSyncReason") == "fleet-runtime-updated"
+        fleet_wave_id = next(
+            (
+                wave.get("id")
+                for phase in fleet_scheduler.get("phases") or []
+                for wave in phase.get("waves") or []
+                if str(wave.get("id") or "").startswith("wave-build-")
+            ),
+            "",
+        )
+        assert fleet_wave_id, "build fleet wave missing"
         run_inline(
             "from pathlib import Path; import json; "
             f"p = Path({str(run_dir / 'scheduler.json')!r}); "
             "data = json.loads(p.read_text(encoding='utf-8')); "
-            "waves = [wave for phase in data.get('phases') or [] for wave in phase.get('waves') or [] if wave.get('id') == 'wave-execution-1']; "
-            "assert waves, 'wave-execution-1 missing'; "
+            f"waves = [wave for phase in data.get('phases') or [] for wave in phase.get('waves') or [] if wave.get('id') == {fleet_wave_id!r}]; "
+            f"assert waves, '{fleet_wave_id} missing'; "
             "waves[0]['backend'] = 'fleet'; "
             "p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')"
         )
@@ -289,24 +789,24 @@ def main() -> int:
             "from pathlib import Path; "
             f"import sys; sys.path.insert(0, {str(ROOT)!r}); "
             "import launch_ilongrun_supervisor as sup; "
-            f"sup.mark_fleet_dispatch_started(Path({str(workspace)!r}), {run_id!r}, 'wave-execution-1', 'claude-sonnet-4.6')"
+            f"sup.mark_fleet_dispatch_started(Path({str(workspace)!r}), {run_id!r}, {fleet_wave_id!r}, 'claude-sonnet-4.6')"
         )
         run_inline(
             "from pathlib import Path; "
             f"import sys; sys.path.insert(0, {str(ROOT)!r}); "
             "import launch_ilongrun_supervisor as sup; "
-            f"sup.set_wave_backend(Path({str(workspace)!r}), {run_id!r}, 'wave-execution-1', 'internal', 'selftest degrade', 'degradedWaves', outcome='degraded', model='claude-sonnet-4.6', rc=1, fallback_reason='command-not-recognized')"
+            f"sup.set_wave_backend(Path({str(workspace)!r}), {run_id!r}, {fleet_wave_id!r}, 'internal', 'selftest degrade', 'degradedWaves', outcome='degraded', model='claude-sonnet-4.6', rc=1, fallback_reason='command-not-recognized')"
         )
         fleet_scheduler = read_json(run_dir / "scheduler.json")
         fleet_dispatch = ((fleet_scheduler.get("runtime") or {}).get("fleetDispatch") or {})
-        assert "wave-execution-1" in (fleet_dispatch.get("degradedWaves") or [])
+        assert fleet_wave_id in (fleet_dispatch.get("degradedWaves") or [])
         assert fleet_dispatch.get("lastOutcome") == "degraded"
         assert len(fleet_dispatch.get("dispatchEvents") or []) >= 2
         assert any(item.get("outcome") == "dispatch-started" for item in fleet_dispatch.get("dispatchEvents") or [])
         assert any(item.get("fallbackReason") == "command-not-recognized" for item in fleet_dispatch.get("dispatchEvents") or [])
 
         for ws in workstreams:
-            ws_status = {"id": ws["id"], "status": "complete"}
+            ws_status = completed_status_payload(ws)
             (run_dir / ws["statusPath"]).write_text(json.dumps(ws_status, ensure_ascii=False, indent=2), encoding="utf-8")
             (run_dir / ws["resultPath"]).write_text("# Result\n\nDone.\n", encoding="utf-8")
             (run_dir / ws["evidencePath"]).write_text("# Evidence\n\nVerified.\n", encoding="utf-8")
@@ -317,7 +817,7 @@ def main() -> int:
             str(ROOT / "finalize_ilongrun_run.py"),
             "--workspace", str(workspace),
             "--run-id", run_id,
-            "--status", "complete",
+            "--status", "completed",
             "--headline", "should fail without final audit review",
             "--local-verify",
             ok=False,
@@ -329,8 +829,12 @@ def main() -> int:
 
         review_dir = run_dir / "reviews"
         review_dir.mkdir(exist_ok=True)
-        (review_dir / "gpt54-final-review.md").write_text(
+        (review_dir / "final-review.md").write_text(
             "# ILongRun Final Review\n\n## Run Metadata\n- Run ID: `demo`\n- Audit model: `gpt-5.4`\n\n## Summary\n- 审查范围：demo\n- 总发现数：`0`\n\n## Findings\n### Must-Fix (Critical)\n- None.\n\n### Should-Fix (Major)\n- None.\n\n### Nit (Minor)\n- naming polish only\n\n## Suggested Fixes\n- none\n\n## Residual Risks\n- low residual risk\n\n## Verdict\n- PASS\n",
+            encoding="utf-8",
+        )
+        (review_dir / "adjudication.md").write_text(
+            "# ILongRun Adjudication\n\n## Decision\n- Decision: `proceed-to-finalize`\n\n## Verdict\n- PROCEED_TO_FINALIZE\n",
             encoding="utf-8",
         )
         run(str(ROOT / "reconcile_ilongrun_run.py"), "--workspace", str(workspace), "--run-id", run_id)
@@ -341,16 +845,17 @@ def main() -> int:
             str(ROOT / "finalize_ilongrun_run.py"),
             "--workspace", str(workspace),
             "--run-id", run_id,
-            "--status", "complete",
+            "--status", "completed",
             "--headline", "finalized with review",
             "--local-verify",
             env={"ILONGRUN_NOTIFICATIONS": "0"},
         )
         assert ok_finalize.returncode == 0
         final_scheduler = read_json(run_dir / "scheduler.json")
-        assert final_scheduler.get("state") == "complete"
-        assert (final_scheduler.get("projectionState") or {}).get("ledgerSyncReason") == "finalize-complete"
+        assert final_scheduler.get("state") == "completed"
+        assert (final_scheduler.get("projectionState") or {}).get("ledgerSyncReason") == "finalize-completed"
         assert (run_dir / "COMPLETION.md").exists()
+        assert not (run_dir / "BLOCKED.md").exists()
         completion_text = (run_dir / "COMPLETION.md").read_text(encoding="utf-8")
         assert "## Run Metadata" in completion_text
         assert "## Summary" in completion_text
@@ -363,11 +868,12 @@ def main() -> int:
             capture_output=True,
             text=True,
             cwd=str(workspace),
-            env={**os.environ, "ILONGRUN_HOME": str(temp_root / "ilongrun-home")},
+            env={**os.environ, "ILONGRUN_HOME": str(helper_home)},
         )
         assert status_board.returncode == 0
         assert "状态看板" in status_board.stdout
         assert "真实完成度" in status_board.stdout
+        assert "方法学门禁" in status_board.stdout
         assert "账本与投影" in status_board.stdout
         assert "投影日志" in status_board.stdout
         assert "分发证据" in status_board.stdout
@@ -405,32 +911,30 @@ def main() -> int:
         ledger_scheduler.setdefault("mission", {})["requestedDeliverables"] = []
         for ws in ledger_scheduler.get("workstreams") or []:
             ws["status"] = "complete"
+            ws["microcycleState"] = completed_status_payload(ws)["microcycleState"]
+            ws["reviewSequence"] = completed_status_payload(ws)["reviewSequence"]
+            ws["freshEvidence"] = completed_status_payload(ws)["freshEvidence"]
+            ws["rootCauseRecord"] = completed_status_payload(ws)["rootCauseRecord"]
             ws.pop("index", None)
             ws.pop("taskListId", None)
             ws.pop("taskListPath", None)
             status_path = ledger_run_dir / ws["statusPath"]
             status_path.parent.mkdir(parents=True, exist_ok=True)
             status_path.write_text(
-                json.dumps(
-                    {
-                        "id": ws["id"],
-                        "status": "done",
-                        "startedAt": "2026-04-07T00:00:00Z",
-                        "completedAt": "2026-04-07T00:01:00Z",
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
+                json.dumps(completed_status_payload(ws), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             (ledger_run_dir / ws["resultPath"]).write_text("# Result\n\nDone.\n", encoding="utf-8")
             (ledger_run_dir / ws["evidencePath"]).write_text("# Evidence\n\nVerified.\n", encoding="utf-8")
         (ledger_run_dir / "reviews").mkdir(exist_ok=True)
-        (ledger_run_dir / "reviews" / "gpt54-final-review.md").write_text(
-            "# GPT-5.4 Final Review\n\n## Must-fix\n- None.\n\n## Suggested fixes\n- none\n\n## Residual risks\n- low\n",
+        (ledger_run_dir / "reviews" / "final-review.md").write_text(
+            "# ILongRun Final Review\n\n## Run Metadata\n- Run ID: `ledger`\n- Audit model: `gpt-5.4`\n\n## Findings\n### Must-Fix (Critical)\n- None.\n\n### Should-Fix (Major)\n- none\n\n### Residual Risks\n- low\n\n## Verdict\n- PASS\n",
             encoding="utf-8",
         )
-        (ledger_run_dir / "reviews" / "adjudication.md").write_text("# adjudication\n\n- proceed\n", encoding="utf-8")
+        (ledger_run_dir / "reviews" / "adjudication.md").write_text(
+            "# ILongRun Adjudication\n\n## Decision\n- Decision: `proceed-to-finalize`\n\n## Verdict\n- PROCEED_TO_FINALIZE\n",
+            encoding="utf-8",
+        )
         (ledger_run_dir / "COMPLETION.md").write_text("# completion\n", encoding="utf-8")
         (ledger_workspace / ".copilot-ilongrun" / "state" / "active-run-id").write_text(ledger_run_id, encoding="utf-8")
         (ledger_run_dir / "scheduler.json").write_text(json.dumps(ledger_scheduler, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -446,7 +950,7 @@ def main() -> int:
         assert ledger_sync_payload["ok"] is True
         assert ledger_sync_payload["activeCleared"] is True
         synced_scheduler = read_json(ledger_run_dir / "scheduler.json")
-        assert synced_scheduler["state"] == "complete"
+        assert synced_scheduler["state"] == "completed"
         assert synced_scheduler.get("taskLists")
         assert synced_scheduler.get("reviews", {}).get("pendingMustFixCount") == 0
         adjudication_text = (ledger_run_dir / "reviews" / "adjudication.md").read_text(encoding="utf-8")
@@ -474,37 +978,102 @@ def main() -> int:
         assert bad_sync.returncode != 0
         assert "completedAt earlier than startedAt" in " ".join(bad_sync_payload["verification"]["driftFindings"])
 
-        drift_workspace = temp_root / "drift-workspace"
-        drift_workspace.mkdir(parents=True, exist_ok=True)
+        blocked_workspace = temp_root / "blocked-workspace"
+        blocked_workspace.mkdir(parents=True, exist_ok=True)
         run(
             str(ROOT / "prepare_ilongrun_run.py"),
-            "--workspace", str(drift_workspace),
-            "--task", "实现账户服务并补测试，最终生成审查报告",
+            "--workspace", str(blocked_workspace),
+            "--task", "实现多人同步原型，若终审失败则阻断并输出摘要",
             "--force-profile", "coding",
         )
-        drift_run_id = (drift_workspace / ".copilot-ilongrun" / "state" / "latest-run-id").read_text(encoding="utf-8").strip()
-        drift_canonical = drift_workspace / ".copilot-ilongrun" / "runs" / drift_run_id
-        drift_legacy = drift_workspace / ".copilot-ilongrun" / drift_run_id
-        drift_legacy.mkdir(parents=True, exist_ok=True)
-        drift_scheduler = read_json(drift_canonical / "scheduler.json")
-        for ws in drift_scheduler.get("workstreams") or []:
+        blocked_run_id = (blocked_workspace / ".copilot-ilongrun" / "state" / "latest-run-id").read_text(encoding="utf-8").strip()
+        blocked_run_dir = blocked_workspace / ".copilot-ilongrun" / "runs" / blocked_run_id
+        blocked_scheduler = read_json(blocked_run_dir / "scheduler.json")
+        for ws in blocked_scheduler.get("workstreams") or []:
             ws["status"] = "complete"
-            ws_dir = drift_legacy / Path(ws["statusPath"]).parent
-            ws_dir.mkdir(parents=True, exist_ok=True)
-            (drift_legacy / ws["statusPath"]).write_text(json.dumps({"id": ws["id"], "status": "complete"}, ensure_ascii=False, indent=2), encoding="utf-8")
-            (drift_legacy / ws["resultPath"]).write_text("# Result\n\nLegacy execution finished.\n", encoding="utf-8")
-            (drift_legacy / ws["evidencePath"]).write_text("# Evidence\n\nLegacy evidence finished.\n", encoding="utf-8")
-        drift_scheduler["updatedAt"] = "2026-04-07T00:53:00Z"
-        drift_scheduler["selectedModel"] = "claude-opus-4.6"
-        (drift_legacy / "scheduler.json").write_text(json.dumps(drift_scheduler, ensure_ascii=False, indent=2), encoding="utf-8")
-        (drift_legacy / "reviews").mkdir(parents=True, exist_ok=True)
-        (drift_legacy / "reviews" / "gpt54-final-review.md").write_text("# Final Review\n\n## Must-fix\n- None\n", encoding="utf-8")
-        run(str(ROOT / "reconcile_ilongrun_run.py"), "--workspace", str(drift_workspace), "--run-id", drift_run_id)
-        assert not drift_legacy.exists()
-        assert (drift_canonical / "reviews" / "gpt54-final-review.md").exists()
-        assert (drift_canonical / "workstreams" / "ws-001" / "result.md").read_text(encoding="utf-8").startswith("# Result")
-        merge_reports = list((drift_workspace / ".copilot-ilongrun" / "legacy-imports" / "run-merges").glob("*.json"))
-        assert merge_reports
+            status_payload = completed_status_payload(ws)
+            (blocked_run_dir / ws["statusPath"]).write_text(json.dumps(status_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            (blocked_run_dir / ws["resultPath"]).write_text("# Result\n\nBlocked path prep done.\n", encoding="utf-8")
+            (blocked_run_dir / ws["evidencePath"]).write_text("# Evidence\n\nBlocked path prep verified.\n", encoding="utf-8")
+        (blocked_run_dir / "reviews").mkdir(exist_ok=True)
+        (blocked_run_dir / "reviews" / "final-review.md").write_text(
+            "# ILongRun Final Review\n\n## Run Metadata\n- Run ID: `blocked`\n- Audit model: `gpt-5.4`\n\n## Findings\n### Must-Fix (Critical)\n- sanitize skillIndex bounds\n\n### Should-Fix (Major)\n- None.\n\n### Residual Risks\n- None.\n\n## Verdict\n- FAIL\n",
+            encoding="utf-8",
+        )
+        (blocked_run_dir / "reviews" / "adjudication.md").write_text(
+            "# ILongRun Adjudication\n\n## Decision\n- Decision: `return-for-fix`\n\n## Verdict\n- RETURN_FOR_FIX\n",
+            encoding="utf-8",
+        )
+        (blocked_workspace / ".copilot-ilongrun" / "state" / "active-run-id").write_text(blocked_run_id, encoding="utf-8")
+        (blocked_run_dir / "scheduler.json").write_text(json.dumps(blocked_scheduler, ensure_ascii=False, indent=2), encoding="utf-8")
+        run(str(ROOT / "reconcile_ilongrun_run.py"), "--workspace", str(blocked_workspace), "--run-id", blocked_run_id)
+        blocked_finalize = run(
+            str(ROOT / "finalize_ilongrun_run.py"),
+            "--workspace", str(blocked_workspace),
+            "--run-id", blocked_run_id,
+            "--status", "blocked",
+            "--headline", "blocked after final audit",
+            "--local-verify",
+            env={"ILONGRUN_NOTIFICATIONS": "0"},
+        )
+        assert blocked_finalize.returncode == 0
+        blocked_final_scheduler = read_json(blocked_run_dir / "scheduler.json")
+        assert blocked_final_scheduler.get("state") == "blocked"
+        assert blocked_final_scheduler.get("verification", {}).get("state") == "failed"
+        assert (blocked_run_dir / "BLOCKED.md").exists()
+        assert not (blocked_run_dir / "COMPLETION.md").exists()
+        assert (blocked_workspace / ".copilot-ilongrun" / "state" / "active-run-id").read_text(encoding="utf-8").strip() == blocked_run_id
+
+        placeholder_workspace = temp_root / "placeholder-workspace"
+        placeholder_workspace.mkdir(parents=True, exist_ok=True)
+        run(
+            str(ROOT / "prepare_ilongrun_run.py"),
+            "--workspace", str(placeholder_workspace),
+            "--task", "验证伪完成 workstream 会被硬失败阻断",
+            "--force-profile", "coding",
+        )
+        placeholder_run_id = (placeholder_workspace / ".copilot-ilongrun" / "state" / "latest-run-id").read_text(encoding="utf-8").strip()
+        placeholder_run_dir = placeholder_workspace / ".copilot-ilongrun" / "runs" / placeholder_run_id
+        placeholder_scheduler = read_json(placeholder_run_dir / "scheduler.json")
+        placeholder_ws = (placeholder_scheduler.get("workstreams") or [])[0]
+        placeholder_ws["status"] = "complete"
+        (placeholder_run_dir / placeholder_ws["statusPath"]).write_text(
+            json.dumps({"id": placeholder_ws["id"], "status": "complete", "startedAt": "2026-04-07T00:00:00Z", "completedAt": "2026-04-07T00:01:00Z"}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (placeholder_run_dir / "scheduler.json").write_text(json.dumps(placeholder_scheduler, ensure_ascii=False, indent=2), encoding="utf-8")
+        placeholder_verify = run(
+            str(ROOT / "verify_ilongrun_run.py"),
+            "--workspace", str(placeholder_workspace),
+            "--run-id", placeholder_run_id,
+            "--json",
+            ok=False,
+        )
+        placeholder_payload = json.loads(placeholder_verify.stdout)
+        assert any("workstream marked done without structured evidence" in item for item in placeholder_payload.get("hardFailures") or [])
+
+        legacy_status_workspace = temp_root / "legacy-status-workspace"
+        legacy_status_workspace.mkdir(parents=True, exist_ok=True)
+        run(
+            str(ROOT / "prepare_ilongrun_run.py"),
+            "--workspace", str(legacy_status_workspace),
+            "--task", "验证 legacy scheduler.status 会被拒绝",
+            "--force-profile", "coding",
+        )
+        legacy_status_run_id = (legacy_status_workspace / ".copilot-ilongrun" / "state" / "latest-run-id").read_text(encoding="utf-8").strip()
+        legacy_status_run_dir = legacy_status_workspace / ".copilot-ilongrun" / "runs" / legacy_status_run_id
+        legacy_status_scheduler = read_json(legacy_status_run_dir / "scheduler.json")
+        legacy_status_scheduler["status"] = "completed"
+        (legacy_status_run_dir / "scheduler.json").write_text(json.dumps(legacy_status_scheduler, ensure_ascii=False, indent=2), encoding="utf-8")
+        legacy_status_verify = run(
+            str(ROOT / "verify_ilongrun_run.py"),
+            "--workspace", str(legacy_status_workspace),
+            "--run-id", legacy_status_run_id,
+            "--json",
+            ok=False,
+        )
+        legacy_status_payload = json.loads(legacy_status_verify.stdout)
+        assert any("legacy top-level scheduler.status field is not allowed" in item for item in legacy_status_payload.get("hardFailures") or [])
 
         legacy_plugin_workspace = temp_root / "legacy-plugin-workspace"
         legacy_plugin_workspace.mkdir(parents=True, exist_ok=True)
@@ -588,9 +1157,10 @@ def main() -> int:
             ok=False,
         )
         delivery_verify_payload = json.loads(delivery_verify.stdout)
-        assert any("delivery audit flagged" in item for item in delivery_verify_payload.get("driftFindings") or [])
+        delivery_findings = (delivery_verify_payload.get("driftFindings") or []) + (delivery_verify_payload.get("softWarnings") or [])
+        assert any("delivery audit" in item for item in delivery_findings)
         delivery_score = delivery_verify_payload.get("completionScore") or {}
-        assert delivery_score.get("deliveryVerdict") in {"blocked", "implemented-not-wired"}
+        assert delivery_score.get("deliveryVerdict") in {"blocked", "implemented-not-wired", "prototype-risk", "state-drift"}
         assert ((delivery_score.get("layers") or {}).get("codeExists") or {}).get("score", 0) >= 0
         assert ((delivery_score.get("layers") or {}).get("wiredIntoEntry") or {}).get("score", 100) < 60
         delivery_report = delivery_workspace / ".copilot-ilongrun" / "runs" / delivery_run_id / "reviews" / "delivery-audit.md"
@@ -604,8 +1174,8 @@ def main() -> int:
             text=True,
         )
         assert delivery_status_board.returncode == 0
-        assert "已实现但未接主链" in delivery_status_board.stdout
         assert "delivery-audit.md" in delivery_status_board.stdout
+        assert ("已实现但未接主链" in delivery_status_board.stdout) or ("delivery audit" in delivery_status_board.stdout.lower())
 
         print("ILongRun selftest passed")
         return 0

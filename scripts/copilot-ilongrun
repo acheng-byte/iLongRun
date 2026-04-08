@@ -11,6 +11,7 @@ HELPER_BIN_DIR="$ILONGRUN_HOME/bin"
 HELPER_CONFIG_DIR="$ILONGRUN_HOME/config"
 MODEL_CONFIG_PATH_DEFAULT="$HELPER_CONFIG_DIR/model-policy.jsonc"
 MODEL_AVAILABILITY_PATH_DEFAULT="$HELPER_CONFIG_DIR/model-availability.json"
+CODING_PROTOCOL_PATH_DEFAULT="$HELPER_CONFIG_DIR/coding-protocol.jsonc"
 LAUNCHER_DIR_NAME=".copilot-ilongrun/launcher"
 COPILOT_CONFIG_DIR="${COPILOT_CONFIG_DIR:-$HOME/.copilot}"
 COPILOT_BIN="${COPILOT_BIN:-$DEFAULT_COPILOT_BIN}"
@@ -32,6 +33,7 @@ SCRIPT_DIR="$(resolve_script_dir)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MODEL_CONFIG_PATH="$MODEL_CONFIG_PATH_DEFAULT"
 MODEL_AVAILABILITY_PATH="$MODEL_AVAILABILITY_PATH_DEFAULT"
+CODING_PROTOCOL_PATH="$CODING_PROTOCOL_PATH_DEFAULT"
 SKILL_MODE=""
 PLUGIN_ARGS=()
 RESOLVED_SKILL_REF=""
@@ -42,6 +44,7 @@ usage() {
 Usage:
   ilongrun "<task>"
   ilongrun-coding "<coding-task>"
+  ilongrun-model [show|<model>|reset] [--refresh]
   ilongrun-prompt "<task>"
   ilongrun-resume [run-id|latest]
   ilongrun-status [run-id|latest]
@@ -50,11 +53,18 @@ Usage:
 Advanced:
   copilot-ilongrun run [--detach] [--max-continues N] [--model MODEL] [--dry-run] <task>
   copilot-ilongrun coding [--detach] [--max-continues N] [--model MODEL] [--dry-run] <task>
+  copilot-ilongrun model [show|<model>|reset] [--refresh]
   copilot-ilongrun prompt [--model MODEL] [--dry-run] <task>
   copilot-ilongrun resume [--detach] [--max-continues N] [--model MODEL] [run-id|latest]
   copilot-ilongrun status [run-id|latest]
   copilot-ilongrun doctor [--refresh-model-cache] [--notify-test]
   copilot-ilongrun selftest
+
+Notes:
+  ilongrun-model 在 TTY 终端里支持 Tab 页签：
+    全局默认 / run模型 / coding模型
+  只有交互式 TUI 才区分这些作用域；
+  直接运行 ilongrun-model <model> 仍然是全局模式。
 EOF
 }
 
@@ -79,6 +89,10 @@ find_bin_from_common_locations() {
 
 helper_path() {
   local name="$1"
+  if [ -x "$SCRIPT_DIR/$name" ]; then
+    printf '%s\n' "$SCRIPT_DIR/$name"
+    return 0
+  fi
   if [ -x "$REPO_ROOT/scripts/$name" ]; then
     printf '%s\n' "$REPO_ROOT/scripts/$name"
     return 0
@@ -203,13 +217,13 @@ cleanup_legacy_workspace_state() {
 }
 
 ensure_model_paths() {
-  if [ -f "$MODEL_CONFIG_PATH_DEFAULT" ]; then
+  if [ -f "$REPO_ROOT/config/model-policy.jsonc" ]; then
+    MODEL_CONFIG_PATH="$REPO_ROOT/config/model-policy.jsonc"
+  elif [ -f "$MODEL_CONFIG_PATH_DEFAULT" ]; then
     MODEL_CONFIG_PATH="$MODEL_CONFIG_PATH_DEFAULT"
   elif [ -f "${MODEL_CONFIG_PATH_DEFAULT%.jsonc}.json" ]; then
     mv "${MODEL_CONFIG_PATH_DEFAULT%.jsonc}.json" "$MODEL_CONFIG_PATH_DEFAULT"
     MODEL_CONFIG_PATH="$MODEL_CONFIG_PATH_DEFAULT"
-  elif [ -f "$REPO_ROOT/config/model-policy.jsonc" ]; then
-    MODEL_CONFIG_PATH="$REPO_ROOT/config/model-policy.jsonc"
   else
     MODEL_CONFIG_PATH="$REPO_ROOT/config/model-policy.json"
   fi
@@ -217,6 +231,11 @@ ensure_model_paths() {
     MODEL_AVAILABILITY_PATH="$MODEL_AVAILABILITY_PATH_DEFAULT"
   else
     MODEL_AVAILABILITY_PATH="$REPO_ROOT/config/model-availability.json"
+  fi
+  if [ -f "$REPO_ROOT/config/coding-protocol.jsonc" ]; then
+    CODING_PROTOCOL_PATH="$REPO_ROOT/config/coding-protocol.jsonc"
+  else
+    CODING_PROTOCOL_PATH="$CODING_PROTOCOL_PATH_DEFAULT"
   fi
   [ -f "$MODEL_CONFIG_PATH" ] || die "ilongrun model policy not found"
 }
@@ -234,6 +253,34 @@ selected_model_for_payload() {
   local subcommand="$1"
   local payload="$2"
   local explicit_model="${3:-}"
+  if [ "$subcommand" = "resume" ] && [ -z "$explicit_model" ]; then
+    local resume_selected
+    resume_selected="$(python3 - "$PWD" "$payload" "$SCRIPT_DIR" "$REPO_ROOT/scripts" "$HELPER_BIN_DIR" <<'PY'
+import sys
+from pathlib import Path
+
+workspace = Path(sys.argv[1])
+run_ref = sys.argv[2]
+script_paths = [Path(sys.argv[3]), Path(sys.argv[4]), Path(sys.argv[5])]
+for script_dir in script_paths:
+    lib = script_dir / "_ilongrun_lib.py"
+    if lib.exists():
+        sys.path.insert(0, str(script_dir))
+        break
+try:
+    from _ilongrun_lib import resolve_run_target, scheduler_path, read_json  # type: ignore
+    target = resolve_run_target(workspace, run_ref)
+    sched = read_json(scheduler_path(target), {})
+    print(str(sched.get("selectedModel") or "").strip())
+except Exception:
+    print("")
+PY
+)"
+    if [ -n "$resume_selected" ]; then
+      printf '%s\n' "$resume_selected"
+      return 0
+    fi
+  fi
   local helper
   helper="$(helper_path model_policy_info.py || true)"
   [ -n "$helper" ] || { printf 'claude-sonnet-4.6\n'; return 0; }
@@ -365,13 +412,18 @@ doctor() {
   local helper_fleet_probe="$(helper_path probe_fleet_capability.py || true)"
   local helper_notify="$(helper_path notify_macos.py || true)"
   local helper_cleanup="$(helper_path cleanup_legacy_workspace.py || true)"
+  local helper_model="$(helper_path manage_ilongrun_model.py || true)"
   local helper_render_board="$(helper_path render_ilongrun_doctor_board.py || true)"
-  local expected_launchers=(ilongrun ilongrun-coding ilongrun-prompt ilongrun-resume ilongrun-status ilongrun-doctor copilot-ilongrun)
-  local tmp_dir checks_file model_probe_json fleet_probe_json selftest_err selftest_out selftest_state_log fleet_cache_path
+  local helper_skill_lint="$(helper_path lint_ilongrun_skills.py || true)"
+  local helper_verify="$(helper_path verify_ilongrun_run.py || true)"
+  local expected_launchers=(ilongrun ilongrun-coding ilongrun-model ilongrun-prompt ilongrun-resume ilongrun-status ilongrun-doctor copilot-ilongrun)
+  local coding_playbooks=(phase-define.md phase-plan.md phase-build.md phase-verify.md phase-review.md phase-audit.md phase-finalize.md swarm-policy.md js-ts-profile.md workspace-isolation.md task-microcycle.md claim-verification.md recovery-debug.md skill-engineering.md)
+  local tmp_dir checks_file model_probe_json fleet_probe_json selftest_err selftest_out selftest_state_log fleet_cache_path workspace_run_json
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ilongrun-doctor.XXXXXX")"
   checks_file="$tmp_dir/checks.tsv"
   model_probe_json="$tmp_dir/model-probe.json"
   fleet_probe_json="$tmp_dir/fleet-probe.json"
+  workspace_run_json="$tmp_dir/workspace-run.json"
   selftest_err="$tmp_dir/selftest.err"
   selftest_out="$tmp_dir/selftest.out"
   fleet_cache_path="$ILONGRUN_HOME/config/capabilities.json"
@@ -435,6 +487,79 @@ PY
   if [ -n "$copilot_bin" ]; then doctor_row copilot ok "$copilot_bin"; else doctor_row copilot fail "未检测到 copilot CLI"; issues=$((issues+1)); fi
   if [ -n "$login" ]; then doctor_row login ok "$login"; else doctor_row login fail "未登录 GitHub Copilot"; issues=$((issues+1)); fi
   if [ -f "$MODEL_CONFIG_PATH" ]; then doctor_row model_policy ok "$MODEL_CONFIG_PATH"; else doctor_row model_policy fail "模型配置文件缺失"; issues=$((issues+1)); fi
+  if [ -f "$CODING_PROTOCOL_PATH" ]; then
+    local protocol_check
+    protocol_check="$(python3 - "$CODING_PROTOCOL_PATH" "$HELPER_BIN_DIR" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[2])
+from _ilongrun_shared import read_jsonc
+payload = read_jsonc(Path(sys.argv[1]), {})
+required = [
+    "methodologyOverlay",
+    "workspaceIsolationPolicy",
+    "taskMicrocycle",
+    "claimVerificationPolicy",
+    "debugPolicy",
+    "skillEngineeringPolicy",
+]
+missing = [key for key in required if key not in payload]
+print("ok" if not missing else "missing:" + ",".join(missing))
+PY
+)"
+    if [ "$protocol_check" = "ok" ]; then
+      doctor_row coding_protocol ok "$CODING_PROTOCOL_PATH"
+    else
+      doctor_row coding_protocol fail "coding protocol 缺字段：${protocol_check#missing:}"
+      issues=$((issues+1))
+    fi
+  else
+    doctor_row coding_protocol fail "coding protocol 缺失"
+    issues=$((issues+1))
+  fi
+  if [ -f "$ILONGRUN_HOME/vendor/agent-skills/LICENSE" ]; then
+    doctor_row vendor_snapshot ok "$ILONGRUN_HOME/vendor/agent-skills"
+  else
+    doctor_row vendor_snapshot fail "vendor/agent-skills 快照缺失"
+    issues=$((issues+1))
+  fi
+  local missing_playbooks=()
+  for playbook in "${coding_playbooks[@]}"; do
+    [ -f "$HOME/.copilot/skills/ilongrun-coding/$playbook" ] || missing_playbooks+=("$playbook")
+  done
+  if [ "${#missing_playbooks[@]}" -eq 0 ]; then
+    doctor_row coding_playbooks ok "$HOME/.copilot/skills/ilongrun-coding"
+  else
+    doctor_row coding_playbooks fail "缺失：${missing_playbooks[*]}"
+    issues=$((issues+1))
+  fi
+  local missing_agents=()
+  for agent in ilongrun-test-engineer.agent.md ilongrun-security-auditor.agent.md ilongrun-final-audit-reviewer.agent.md; do
+    [ -f "$HOME/.copilot/agents/$agent" ] || missing_agents+=("$agent")
+  done
+  if [ "${#missing_agents[@]}" -eq 0 ]; then
+    doctor_row coding_agents ok "$HOME/.copilot/agents"
+  else
+    doctor_row coding_agents fail "缺失：${missing_agents[*]}"
+    issues=$((issues+1))
+  fi
+  if [ -n "$helper_skill_lint" ] && [ -f "$helper_skill_lint" ]; then
+    doctor_row skill_lint ok "$helper_skill_lint"
+  else
+    doctor_row skill_lint fail "lint_ilongrun_skills.py 缺失"
+    issues=$((issues+1))
+  fi
+  if [ -n "$helper_model" ] && [ -f "$helper_model" ]; then
+    doctor_row model_helper ok "$helper_model"
+  else
+    doctor_row model_helper fail "manage_ilongrun_model.py 缺失"
+    issues=$((issues+1))
+  fi
+  if [ -f "$HOME/.copilot/skills/ilongrun-model/SKILL.md" ]; then
+    doctor_row legacy_skill.ilongrun-model warn "$HOME/.copilot/skills/ilongrun-model（legacy 会话入口残留，可清理）"
+  else
+    doctor_row legacy_skill.ilongrun-model skip "未发现旧 /ilongrun-model skill 残留"
+  fi
   if legacy_plugin_enabled; then
     if auto_uninstall_legacy_plugin >/dev/null 2>&1; then
       doctor_row legacy_plugin ok "已自动卸载：${LEGACY_PLUGIN_NAME}"
@@ -455,6 +580,89 @@ PY
       doctor_row workspace_legacy ok "已清理：$cleanup_action"
       [ -n "$cleanup_archive" ] && doctor_row workspace_archive info "$cleanup_archive"
     fi
+  fi
+  if [ -d "$PWD/.copilot-ilongrun" ] && [ -n "$helper_verify" ]; then
+    local workspace_active_run workspace_latest_run workspace_target_run
+    workspace_active_run="$(cat "$PWD/.copilot-ilongrun/state/active-run-id" 2>/dev/null || true)"
+    workspace_latest_run="$(cat "$PWD/.copilot-ilongrun/state/latest-run-id" 2>/dev/null || true)"
+    workspace_target_run="${workspace_active_run:-$workspace_latest_run}"
+    if [ -n "$workspace_target_run" ]; then
+      doctor_row workspace_run info "active=${workspace_active_run:-none} / latest=${workspace_latest_run:-none} / target=${workspace_target_run}"
+      python3 "$helper_verify" --workspace "$PWD" --run-id "$workspace_target_run" --json >"$workspace_run_json" 2>"$tmp_dir/workspace-run.err" || true
+      if ! python3 - "$workspace_run_json" "$checks_file" <<'PY'
+import json, sys
+from pathlib import Path
+
+payload_path = Path(sys.argv[1])
+checks_path = Path(sys.argv[2])
+try:
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+except Exception:
+    payload = {}
+
+rows = []
+hard = [str(item) for item in payload.get("hardFailures") or []]
+drift = [str(item) for item in payload.get("driftFindings") or []]
+soft = [str(item) for item in payload.get("softWarnings") or []]
+ok = bool(payload.get("ok"))
+scheduler = payload.get("scheduler") or {}
+run_id = str((scheduler.get("runId") or "")).strip() or "unknown"
+
+def add(key: str, status: str, value: str) -> None:
+    rows.append((key, status, value.replace("\t", " ").replace("\n", " ")))
+
+if not payload:
+    add("workspace_run_verification", "warn", "当前工作区 run 健康检查结果不可读")
+    overall_fail = False
+else:
+    if ok:
+        add("workspace_run_verification", "ok", f"run `{run_id}` 账本与门禁通过")
+    else:
+        add("workspace_run_verification", "fail", f"run `{run_id}` 需处理：hard={len(hard)} / drift={len(drift)} / soft={len(soft)}")
+    if payload.get("recommendedAction"):
+        add("workspace_run_action", "info", str(payload.get("recommendedAction")))
+
+    findings = hard + drift
+    state_conflict = next((item for item in findings if "scheduler.status" in item or "invalid canonical scheduler.state" in item), "")
+    add("workspace_run_state_conflict", "fail" if state_conflict else "skip", state_conflict or "未发现 top-level state/status 冲突")
+
+    active_pointer = next((item for item in findings if "active-run-id" in item), "")
+    add("workspace_run_active_pointer", "fail" if active_pointer else "skip", active_pointer or "未发现已完成 run 的 active 指针残留")
+
+    finalize_issue = next((
+        item for item in findings
+        if "COMPLETION.md" in item
+        or "BLOCKED.md" in item
+        or "FAILED.md" in item
+        or "reviews/final-review.md is missing" in item
+        or "reviews/adjudication.md is missing" in item
+        or "running run must not contain terminal summary documents" in item
+    ), "")
+    add("workspace_run_finalize", "fail" if finalize_issue else "skip", finalize_issue or "未发现终态摘要或 finalize 门禁异常")
+
+    placeholder_issue = next((item for item in findings if "workstream marked done without structured evidence" in item), "")
+    add("workspace_run_review_placeholder", "fail" if placeholder_issue else "skip", placeholder_issue or "未发现 review/result/evidence 伪完成")
+
+    pollution_issue = next((item for item in findings if "workspace tracks generated artifacts" in item), "")
+    add("workspace_run_pollution", "fail" if pollution_issue else "skip", pollution_issue or "未发现 git 跟踪的生成态目录污染")
+    overall_fail = not ok
+
+with checks_path.open("a", encoding="utf-8") as handle:
+    for key, status, value in rows:
+        handle.write(f"{key}\t{status}\t{value}\n")
+
+raise SystemExit(1 if overall_fail else 0)
+PY
+      then
+        issues=$((issues+1))
+      fi
+    else
+      doctor_row workspace_run skip "当前工作区没有 active/latest run"
+    fi
+  elif [ -d "$PWD/.copilot-ilongrun" ]; then
+    doctor_row workspace_run warn "检测到 .copilot-ilongrun，但 verify helper 缺失"
+  else
+    doctor_row workspace_run skip "当前工作区没有 .copilot-ilongrun 运行状态"
   fi
   if [ -n "$screen_bin" ]; then doctor_row screen ok "$screen_bin"; else doctor_row screen warn "未检测到；将无法使用 --detach"; fi
   if [ "$(uname -s)" = "Darwin" ]; then
@@ -579,6 +787,12 @@ if [ "$subcmd" = "status" ]; then
   fi
 fi
 
+if [ "$subcmd" = "model" ]; then
+  helper="$(helper_path manage_ilongrun_model.py || true)"
+  [ -n "$helper" ] || die "model helper missing"
+  exec python3 "$helper" --workspace "$PWD" "$@"
+fi
+
 preflight_or_die
 
 model=""
@@ -648,7 +862,9 @@ if [ "$subcmd" = "run" ] || [ "$subcmd" = "coding" ]; then
   PREPARE_RUN="$(helper_path prepare_ilongrun_run.py || true)"
   [ -n "$PREPARE_RUN" ] || die "prepare_ilongrun_run helper missing"
   if [ "$dry_run" -eq 0 ]; then
-    prepare_cmd=(python3 "$PREPARE_RUN" --workspace "$PWD" --task "$payload_text" --launcher-mode launcher-preallocated --session-model "$selected_model" --model-control-mode launcher-enforced --print-json)
+    model_control_mode="launcher-enforced"
+    [ -n "$model" ] && model_control_mode="explicit-model-locked"
+    prepare_cmd=(python3 "$PREPARE_RUN" --workspace "$PWD" --task "$payload_text" --launcher-mode launcher-preallocated --session-model "$selected_model" --model-control-mode "$model_control_mode" --print-json)
     [ -n "$model" ] && prepare_cmd+=(--explicit-model "$model")
     [ -n "$force_profile" ] && prepare_cmd+=(--force-profile "$force_profile")
     prepared_json="$("${prepare_cmd[@]}")" || die "failed to prepare fresh ILongRun run"
